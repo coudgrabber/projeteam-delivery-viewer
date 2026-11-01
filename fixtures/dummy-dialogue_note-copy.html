@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>ダミー対話版──納品ビューア検証用（公開可）</title>
+<style>article { line-height: 1.9; } .panel { padding: 12px; }</style>
+</head>
+<body>
+<h1>ダミー対話版──納品ビューア検証用（公開可）</h1>
+<div id="panel">
+  <button id="copy-body" onclick="window.__PANEL_CLICK__=true">書式付き本文をコピー</button>
+  <p id="status"></p>
+</div>
+<script>
+  window.__DELIVERED_SCRIPT_RAN__ = true;
+  document.title = 'SCRIPT EXECUTED';
+</script>
+<article id="note-article">
+<h3 class="source-heading" style="text-align: center;">◆今回のダミー素材◆</h3>
+<h5 class="source-bibliography"><strong>Dummy Author</strong>, <strong><a href="https://example.com/dummy">"Dummy Title"</a></strong> <strong>(Dummy Journal, 2026年11月1日）</strong></h5>
+<p></p>
+<ul><li>概要：検証のためのダミー素材であり、実在の研究ではない。</li></ul>
+<hr>
+<blockquote class="intro-block"><p>これは導入文のダミーである。<br><br>二段落目のダミー。空行の再現を確認する。<br><br>三段落目のダミー。</p></blockquote>
+<hr>
+<h3>第一節 ダミーの見出し</h3>
+<p><strong>話者A：</strong>ここは発話のダミーである。<strong>太字</strong>と<a href="https://example.com/ref">識別できる語句へのリンク</a>を含む。</p>
+<p><strong>話者B：</strong>二つ目の発話のダミー。</p>
+<blockquote><p><strong>ポイント解説</strong></p><p>解説の第一段落のダミー。</p><p>解説の第二段落のダミー。</p></blockquote>
+<hr>
+<p class="crosslink-paragraph">これは相互リンク案内の1段落目のダミーである。</p>
+<p class="crosslink-spacer"><br></p>
+<p class="crosslink-paragraph"><strong>ダミーのタイトル行──太字が保持されるかを確認する</strong></p>
+<p class="crosslink-spacer"><br></p>
+<p class="crosslink-paragraph">これは3段落目のダミーである。</p>
+<p class="crosslink-spacer"><br></p>
+<p class="crosslink-paragraph">これは4段落目のダミーである。段落間の空行が保持されるかを確認する。</p>
+<hr>
+<blockquote><p style="text-align: center;"><strong>ダミーのマガジン</strong></p></blockquote>
+</article>
+<section id="composition-memo">
+<h2>構成メモ</h2>
+<p>制作管理用。コピー対象に混入してはならない。</p>
+</section>
+</body>
+</html>

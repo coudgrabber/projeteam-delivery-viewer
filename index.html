@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>納品ビューア 実機検証（ダミー記事のみ）</title>
+<!--
+  この公開ビューアは実機検証専用である。
+  - 認証情報を一切扱わない（トークン入力欄・保存処理・外部API呼び出しを持たない）。
+  - 取得先は同じリポジトリ内のダミー記事（相対パス）だけである。
+  - 外部CDN・解析スクリプト・外部サービスを参照しない。すべて自己完結。
+  - 取得したHTMLのスクリプトは実行しない（DOMParserで不活性化し、許可リストで再構成する）。
+-->
+<style>
+  :root { color-scheme: light dark; --fg:#111; --bg:#fff; --mut:#555; --line:#c7c7c7; --ok:#0a6; --ng:#b00; --warn:#a60; --soft:#f2f2f2; }
+  @media (prefers-color-scheme: dark) { :root { --fg:#eee; --bg:#151515; --mut:#aaa; --line:#444; --soft:#222; } }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:16px; font:16px/1.75 -apple-system,BlinkMacSystemFont,"Hiragino Sans",sans-serif; color:var(--fg); background:var(--bg); }
+  .wrap { max-width:720px; margin:0 auto; }
+  h1 { font-size:20px; margin:0 0 12px; }
+  fieldset { border:1px solid var(--line); border-radius:10px; margin:0 0 16px; padding:12px 14px; }
+  legend { font-weight:700; font-size:13px; padding:0 4px; }
+  select, button { font:inherit; }
+  select { width:100%; padding:9px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); }
+  button { padding:12px 14px; margin:8px 8px 0 0; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); }
+  button.primary { font-weight:700; }
+  .band { padding:10px 12px; border:1px solid var(--line); border-radius:8px; margin-bottom:16px; font-size:14px; background:var(--soft); }
+  .mono { font-family:ui-monospace,Menlo,monospace; font-size:12px; word-break:break-all; }
+  .ok { color:var(--ok); } .ng { color:var(--ng); } .warn { color:var(--warn); }
+  ul.report { padding-left:1.2em; font-size:13px; margin:4px 0 0; }
+  /* 本文の見え方を note / Wix に近づけ、配置と余白を目視できるようにする */
+  #stage { border:1px solid var(--line); border-radius:8px; padding:14px 16px; margin-top:10px; line-height:1.9; }
+  #stage h3 { margin:2em 0 .8em; font-size:1.2rem; }
+  #stage p { margin:0 0 1em; }
+  #stage blockquote { margin:1.4em 0; padding:16px 20px; background:var(--soft); }
+  #stage hr { margin:2em 0; border:0; border-top:1px solid var(--line); }
+  #stage img { max-width:100%; height:auto; }
+  #paste-check { min-height:86px; padding:10px 12px; border:2px dashed var(--line); border-radius:8px; }
+  #paste-check:empty::before { content:"ここを長押し →「ペースト」。貼り付けの形式を検査します。"; color:var(--mut); }
+  .note { font-size:13px; color:var(--mut); }
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>納品ビューア 実機検証（ダミー記事のみ）</h1>
+
+<div class="band" id="env-notice">
+  JavaScriptが動作していません。iPhoneでは<strong>Safari</strong>で開き直してください。
+</div>
+
+<p class="note">このページは検証専用です。認証情報は扱いません。表示できるのは、同じリポジトリに置いた公開可能なダミー記事だけです。</p>
+
+<fieldset>
+  <legend>1. ダミー記事を選ぶ</legend>
+  <label for="pick" class="note">記事</label>
+  <select id="pick">
+    <option value="fixtures/dummy-dialogue_note-copy.html">ダミー対話版（note用の構造を模した版）</option>
+    <option value="fixtures/dummy-essay_wix-copy.html">ダミー散文版（Wix用の構造を模した版）</option>
+    <option value="fixtures/dummy-contaminated.html">不良再現版（本文に制作管理見出しが混入）</option>
+  </select>
+  <button class="primary" id="load">取得して表示</button>
+  <div id="load-status" class="mono"></div>
+</fieldset>
+
+<fieldset>
+  <legend>2. 取り込み結果（取得HTMLのスクリプトは実行しない）</legend>
+  <ul class="report" id="sanitize-report"></ul>
+  <div id="stage"></div>
+</fieldset>
+
+<fieldset>
+  <legend>3. コピー</legend>
+  <button class="primary" id="copy-rich">書式付き本文をコピー（HTML方式）</button>
+  <button id="copy-fallback">別方式でコピー（フォールバック）</button>
+  <div id="copy-status" class="mono"></div>
+  <p class="note">コピーAPIの正常終了は、note／Wix本文欄での書式保持を意味しない。最終判定は貼り付け後の目視で行う。</p>
+</fieldset>
+
+<fieldset>
+  <legend>4. 貼り付け形式の検査</legend>
+  <div id="paste-report" class="mono">未検査。</div>
+  <div id="paste-check" contenteditable="true" role="textbox" aria-label="検査欄"></div>
+</fieldset>
+</div>
+
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+
+  const caps = {
+    secureContext: !!window.isSecureContext,
+    clipboardWrite: !!(navigator.clipboard && typeof navigator.clipboard.write === 'function'),
+    clipboardItem: !!window.ClipboardItem
+  };
+  $('env-notice').textContent = 'JavaScriptは動作しています。 secureContext:' + (caps.secureContext ? '可' : '不可')
+    + ' / clipboard.write:' + (caps.clipboardWrite ? '可' : '不可')
+    + ' / ClipboardItem:' + (caps.clipboardItem ? '可' : '不可')
+    + ' / origin:' + location.origin;
+
+  // ===== サニタイズ方針 =====
+  // 取得HTMLのスクリプトは実行しない。属性は許可リスト方式。
+  // ただし class を落とすだけでは note に必要な「中央寄せ」が失われるため、
+  //  (a) style は text-align のみ値を検査して通す
+  //  (b) 既知の class はビューア側の表（CLASS_STYLE）から inline style を再構成する
+  // 余白は、空の p と br、hr の構造をそのまま保つことで再現する（CSSには依存しない）。
+  const DROP_ELEMENTS = ['script','noscript','iframe','object','embed','link','meta','base','form','input','button','select','textarea','style','template','svg','math'];
+  const ALLOWED_ATTR = { a:['href','title'], img:['src','alt','title','width','height'], td:['colspan','rowspan'], th:['colspan','rowspan'] };
+  const ALLOWED_TEXT_ALIGN = ['center','left','right'];
+  const CLASS_STYLE = { 'source-heading':'text-align: center;' };
+  const ADMIN_HEADINGS = ['構成メモ','相互リンク案','元素材情報','ハッシュタグ','制作メモ'];
+  const CONTENT_SELECTORS = ['#wix-article','#note-article','#article','article'];
+
+  function pickTextAlign(styleValue) {
+    const m = /(?:^|;)\s*text-align\s*:\s*([a-z-]+)\s*(?:;|$)/i.exec(styleValue || '');
+    if (!m) return null;
+    const v = m[1].toLowerCase();
+    return ALLOWED_TEXT_ALIGN.includes(v) ? 'text-align: ' + v + ';' : null;
+  }
+
+  function sanitize(htmlText) {
+    const report = [];
+    const doc = new DOMParser().parseFromString(htmlText, 'text/html'); // 不活性
+    let root = null, used = null;
+    for (const sel of CONTENT_SELECTORS) { const n = doc.querySelector(sel); if (n) { root = n; used = sel; break; } }
+    if (!root) { root = doc.body; used = 'body（本文領域が特定できず全体を対象）'; report.push(['ng','本文領域のセレクタが見つからなかった']); }
+    else report.push(['ok','本文領域：' + used]);
+
+    const clone = root.cloneNode(true);
+    let dropped = 0, attrsStripped = 0, urlsNeutralized = 0, alignKept = 0, alignRebuilt = 0;
+    clone.querySelectorAll(DROP_ELEMENTS.join(',')).forEach((el) => { el.remove(); dropped++; });
+
+    const walker = document.createTreeWalker(clone, NodeFilter.SHOW_ELEMENT);
+    const elements = [clone];
+    while (walker.nextNode()) elements.push(walker.currentNode);
+    for (const el of elements) {
+      const tag = el.tagName.toLowerCase();
+      const allow = ALLOWED_ATTR[tag] || [];
+      // 先に保持すべき書式を取り出す
+      let keepAlign = pickTextAlign(el.getAttribute('style'));
+      if (keepAlign) alignKept++;
+      if (!keepAlign) {
+        const cls = (el.getAttribute('class') || '').split(/\s+/);
+        for (const c of cls) if (CLASS_STYLE[c]) { keepAlign = CLASS_STYLE[c]; alignRebuilt++; break; }
+      }
+      for (const attr of Array.from(el.attributes)) {
+        const name = attr.name.toLowerCase();
+        if (!allow.includes(name)) { el.removeAttribute(attr.name); attrsStripped++; continue; }
+        if (name === 'href' || name === 'src') {
+          const v = attr.value.trim();
+          if (!/^(https?:|mailto:|#)/i.test(v)) { el.removeAttribute(attr.name); urlsNeutralized++; }
+        }
+      }
+      if (keepAlign) el.setAttribute('style', keepAlign);
+    }
+
+    report.push(['ok','除去した要素：' + dropped + '件（script/iframe/style/フォーム等）']);
+    report.push(['ok','除去した属性：' + attrsStripped + '件（on*・id・class を含む）']);
+    report.push(['ok','保持した中央寄せ等：style由来' + alignKept + '件／class由来の再構成' + alignRebuilt + '件']);
+    if (urlsNeutralized) report.push(['warn','http(s)以外のURLを除去：' + urlsNeutralized + '件']);
+
+    const structure = {
+      見出し: clone.querySelectorAll('h2,h3,h4,h5').length,
+      太字: clone.querySelectorAll('strong,b').length,
+      リンク: clone.querySelectorAll('a[href]').length,
+      引用: clone.querySelectorAll('blockquote').length,
+      斜体: clone.querySelectorAll('em,i').length,
+      箇条書き: clone.querySelectorAll('li').length,
+      空段落: Array.from(clone.querySelectorAll('p')).filter((p) => !p.textContent.trim()).length,
+      改行: clone.querySelectorAll('br').length,
+      区切り線: clone.querySelectorAll('hr').length
+    };
+    report.push(['ok','構造：' + Object.entries(structure).map(([k,v]) => k + ':' + v).join(' / ')]);
+
+    const hits = [];
+    clone.querySelectorAll('h1,h2,h3,h4,h5,h6,strong,p').forEach((el) => {
+      const t = (el.textContent || '').trim();
+      for (const k of ADMIN_HEADINGS) if (t === k || t === '**' + k + '**') hits.push(k);
+    });
+    if (hits.length) report.push(['ng','制作管理見出しがコピー対象に混入：' + [...new Set(hits)].join('、')]);
+    else report.push(['ok','制作管理見出しの混入なし']);
+
+    const container = document.createElement('div');
+    container.appendChild(clone);
+    return { container, report, structure };
+  }
+
+  function renderReport(report) {
+    const ul = $('sanitize-report');
+    ul.innerHTML = '';
+    for (const [kind, text] of report) {
+      const li = document.createElement('li');
+      li.className = kind;
+      li.textContent = (kind === 'ok' ? '合格: ' : kind === 'ng' ? '不合格: ' : '注意: ') + text;
+      ul.appendChild(li);
+    }
+  }
+
+  let currentNode = null;
+  const richHtml = () => '<meta charset="utf-8">' + (currentNode ? currentNode.innerHTML : '');
+  const plainText = () => currentNode ? currentNode.innerText : '';
+
+  async function copyRich() {
+    const status = $('copy-status');
+    if (!currentNode) { status.textContent = '先に本文を取得してください。'; return; }
+    if (!(caps.secureContext && caps.clipboardWrite && caps.clipboardItem)) {
+      status.textContent = 'この環境ではHTML方式が使えません（secureContext／clipboard.write／ClipboardItemのいずれかが不可）。フォールバックを試してください。';
+      return;
+    }
+    try {
+      await navigator.clipboard.write([new ClipboardItem({
+        'text/html': new Blob([richHtml()], { type: 'text/html' }),
+        'text/plain': new Blob([plainText()], { type: 'text/plain' })
+      })]);
+      status.textContent = 'コピーAPIが正常終了しました（書式保持は貼り付け後に確認してください）。';
+    } catch (e) {
+      status.textContent = 'HTML方式が失敗：' + e.message + ' / フォールバックを試してください。';
+    }
+  }
+
+  function copyFallback() {
+    const status = $('copy-status');
+    if (!currentNode) { status.textContent = '先に本文を取得してください。'; return; }
+    let included = false;
+    const onCopy = (event) => {
+      if (!event.clipboardData) return;
+      event.clipboardData.setData('text/html', richHtml());
+      event.clipboardData.setData('text/plain', plainText());
+      included = true;
+      event.preventDefault();
+    };
+    document.addEventListener('copy', onCopy, true);
+    const range = document.createRange();
+    range.selectNodeContents(currentNode);
+    const sel = window.getSelection();
+    sel.removeAllRanges(); sel.addRange(range);
+    let result = false;
+    try { result = document.execCommand('copy'); } catch (e) { result = false; }
+    document.removeEventListener('copy', onCopy, true);
+    if (result && included) { status.textContent = 'フォールバックでHTML形式を渡しました（execCommand:true / copyイベント:true）。'; sel.removeAllRanges(); }
+    else { status.textContent = 'フォールバック不成立（execCommand:' + result + ' / copyイベント:' + included + '）。本文を選択したので、iOSの「コピー」を使ってください。'; }
+  }
+
+  $('paste-check').addEventListener('paste', (event) => {
+    const cd = event.clipboardData;
+    const rep = $('paste-report');
+    if (!cd) { rep.textContent = 'clipboardDataを読めませんでした。'; return; }
+    const html = cd.getData('text/html');
+    const text = cd.getData('text/plain');
+    if (!html) { rep.innerHTML = '<span class="ng">不合格: HTML形式なし</span>（text/plain ' + (text ? text.length + '字' : 'なし') + '）'; return; }
+    const d = new DOMParser().parseFromString(html, 'text/html');
+    const n = (q) => d.body.querySelectorAll(q).length;
+    const counts = {
+      見出し: n('h2,h3,h4,h5'), 太字: n('strong,b'), リンク: n('a[href]'), 引用: n('blockquote'),
+      斜体: n('em,i'), 箇条書き: n('li'),
+      中央寄せ: Array.from(d.body.querySelectorAll('[style]')).filter((e) => /text-align\s*:\s*center/i.test(e.getAttribute('style'))).length,
+      空段落: Array.from(d.body.querySelectorAll('p')).filter((p) => !p.textContent.trim()).length,
+      改行: n('br')
+    };
+    const required = ['見出し','太字','リンク','引用'];
+    const missing = required.filter((k) => counts[k] === 0);
+    rep.innerHTML = (missing.length
+      ? '<span class="ng">不合格: ' + missing.join('、') + 'が0件</span>'
+      : '<span class="ok">合格: 見出し・太字・リンク・引用がすべて1件以上</span>')
+      + '　HTML形式あり（' + html.length + '字） '
+      + Object.entries(counts).map(([k, v]) => k + ':' + v).join(' / ');
+  });
+
+  $('load').addEventListener('click', async () => {
+    const status = $('load-status');
+    status.textContent = '取得中…';
+    $('stage').innerHTML = ''; currentNode = null;
+    try {
+      const res = await fetch($('pick').value, { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const text = await res.text();
+      const { container, report } = sanitize(text);
+      renderReport(report);
+      $('stage').appendChild(container);
+      currentNode = container;
+      status.textContent = '取得' + text.length + '字 / 描画完了';
+    } catch (e) {
+      status.innerHTML = '<span class="ng">取得失敗: ' + String(e.message).replace(/[<>&]/g, '') + '</span>';
+    }
+  });
+
+  $('copy-rich').addEventListener('click', copyRich);
+  $('copy-fallback').addEventListener('click', copyFallback);
+})();
+</script>
+</body>
+</html>
