@@ -1,0 +1,657 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>納品ビューア（非公開リポジトリ接続版・試作）</title>
+<!--
+  試作版。公開リポジトリへは配置しない。
+  方針
+  - 取得HTMLのJavaScriptは実行しない。サニタイズとコピーはこのページ側に集約する。
+  - トークンはページ内のクロージャ変数にのみ置く。URL・ログ・DOM・ブラウザストレージへ出さない。
+  - Bearer は api.github.com にのみ送る。credentials:'omit' / cache:'no-store' / redirect:'error'。
+  - fail-closed：ハッシュ一致・本文領域の確定・混入なしの3つが揃わない限りコピーさせない。
+-->
+<style>
+  :root { color-scheme: light dark; --fg:#111; --bg:#fff; --mut:#555; --line:#c7c7c7; --ok:#0a6; --ng:#b00; --warn:#a60; --soft:#f2f2f2; }
+  @media (prefers-color-scheme: dark) { :root { --fg:#eee; --bg:#151515; --mut:#aaa; --line:#444; --soft:#222; } }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:16px; font:16px/1.75 -apple-system,BlinkMacSystemFont,"Hiragino Sans","Segoe UI",sans-serif; color:var(--fg); background:var(--bg); }
+  .wrap { max-width:760px; margin:0 auto; }
+  h1 { font-size:20px; margin:0 0 12px; }
+  fieldset { border:1px solid var(--line); border-radius:10px; margin:0 0 14px; padding:12px 14px; }
+  legend { font-weight:700; font-size:13px; padding:0 4px; }
+  label { display:block; font-size:13px; color:var(--mut); margin-top:8px; }
+  input, select, button { font:inherit; }
+  input, select { width:100%; padding:9px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); }
+  button { padding:12px 14px; margin:8px 8px 0 0; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); }
+  button.primary { font-weight:700; }
+  button[disabled] { opacity:.45; }
+  .band { padding:10px 12px; border:1px solid var(--line); border-radius:8px; margin-bottom:14px; font-size:14px; background:var(--soft); }
+  .mono { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px; word-break:break-all; }
+  .ok { color:var(--ok); } .ng { color:var(--ng); } .warn { color:var(--warn); }
+  ul.report { padding-left:1.2em; font-size:13px; margin:4px 0 0; }
+  #stage { border:1px solid var(--line); border-radius:8px; padding:14px 16px; margin-top:10px; line-height:1.9; }
+  #stage h3 { margin:2em 0 .8em; font-size:1.2rem; }
+  #stage p { margin:0 0 1em; }
+  #stage blockquote { margin:1.4em 0; padding:16px 20px; background:var(--soft); }
+  #stage hr { margin:2em 0; border:0; border-top:1px solid var(--line); }
+  #stage img { max-width:100%; height:auto; }
+  #paste-check { min-height:80px; padding:10px 12px; border:2px dashed var(--line); border-radius:8px; }
+  .note { font-size:13px; color:var(--mut); }
+  #gate { font-weight:700; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>納品ビューア（非公開リポジトリ接続版・試作）</h1>
+<div class="band" id="env-notice">JavaScriptが動作していません。ブラウザで開き直してください。</div>
+
+<fieldset>
+  <legend>1. 接続</legend>
+  <label for="source">取得元</label>
+  <select id="source">
+    <option value="dummy">ダミー検証モード（トークン不要・どのオリジンでも可）</option>
+    <option value="github">非公開リポジトリ（専用オリジンでのみ接続可）</option>
+  </select>
+  <form id="auth-form" autocomplete="on" onsubmit="return false">
+    <label for="repo">owner/repo</label>
+    <input type="text" id="repo" name="repo" value="coudgrabber/projeteam-blog" autocapitalize="off" spellcheck="false">
+    <!-- パスワードマネージャに拾わせるため、username と password の組にする。
+         値はフォーム送信せず、接続時に読み取って即座に欄を消去する。 -->
+    <label for="pm-user">保存名（パスワードマネージャ用・任意）</label>
+    <input type="text" id="pm-user" name="username" autocomplete="username" value="projeteam-blog (contents:read)" autocapitalize="off" spellcheck="false">
+    <label for="token">fine-grained PAT（Contents: Read-only／対象1リポジトリ）</label>
+    <input type="password" id="token" name="password" autocomplete="current-password" autocapitalize="off" spellcheck="false">
+  </form>
+  <button class="primary" id="connect">接続して記事一覧を取得</button>
+  <button id="disconnect">切断（トークンを破棄）</button>
+  <div id="conn-status" class="mono"></div>
+</fieldset>
+
+<fieldset>
+  <legend>2. 記事と形式</legend>
+  <label for="branch">記事（article/* ブランチ）</label>
+  <select id="branch" disabled><option>未接続</option></select>
+  <label for="kind">形式</label>
+  <select id="kind" disabled><option>記事を選んでください</option></select>
+  <button class="primary" id="load" disabled>取得して検証</button>
+  <div id="load-status" class="mono"></div>
+</fieldset>
+
+<fieldset>
+  <legend>3. 検証</legend>
+  <div id="gate" class="mono">未検証。</div>
+  <ul class="report" id="verify-report"></ul>
+</fieldset>
+
+<fieldset>
+  <legend>4. 本文</legend>
+  <div id="stage"></div>
+</fieldset>
+
+<fieldset>
+  <legend>5. コピー</legend>
+  <button class="primary" id="copy-rich" disabled>書式付き本文をコピー（HTML方式）</button>
+  <button id="copy-fallback" disabled>別方式でコピー（フォールバック）</button>
+  <div id="copy-status" class="mono"></div>
+  <p class="note">コピーAPIの正常終了は、note／Wix本文欄での書式保持を意味しない。最終判定は貼り付け後の目視で行う。</p>
+</fieldset>
+
+<fieldset>
+  <legend>6. 貼り付け形式の検査</legend>
+  <div id="paste-report" class="mono">未検査。</div>
+  <div id="paste-check" contenteditable="true" role="textbox" aria-label="検査欄"></div>
+</fieldset>
+</div>
+
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const API = 'https://api.github.com';
+
+  // ===== オリジン制限 =====
+  // 共有オリジン（*.github.io）では、他のPagesプロジェクトと localStorage 等を共有するため、
+  // メモリ保持であってもトークンを入力させない。専用オリジンを確保してから接続する。
+  const ALLOWED_HOSTS = [
+    'delivery.projeteam.com',   // 本番で確保する専用オリジン（未設定）
+    'localhost', '127.0.0.1'    // 自動検証用
+  ];
+  const ORIGIN_OK = ALLOWED_HOSTS.includes(location.hostname);
+
+  // ===== 環境判定 =====
+  const caps = {
+    secureContext: !!window.isSecureContext,
+    clipboardWrite: !!(navigator.clipboard && typeof navigator.clipboard.write === 'function'),
+    clipboardItem: !!window.ClipboardItem,
+    subtle: !!(window.crypto && window.crypto.subtle && window.crypto.subtle.digest)
+  };
+  $('env-notice').textContent = 'JavaScriptは動作しています。 secureContext:' + (caps.secureContext ? '可' : '不可')
+    + ' / clipboard.write:' + (caps.clipboardWrite ? '可' : '不可')
+    + ' / ClipboardItem:' + (caps.clipboardItem ? '可' : '不可')
+    + ' / SHA-256:' + (caps.subtle ? '可' : '不可')
+    + ' / origin:' + location.origin
+    + ' / 専用オリジン:' + (ORIGIN_OK ? '可（接続可能）' : '不可（接続は無効）');
+
+  // ===== トークン：クロージャ変数のみ。保存しない =====
+  let TOKEN = null;
+  const setToken = (v) => { TOKEN = v || null; };
+  const clearToken = () => { TOKEN = null; $('token').value = ''; };
+
+  // ===== 取得の共通処理 =====
+  function authHeaders(url) {
+    const h = { 'X-GitHub-Api-Version': '2022-11-28' };
+    // Bearer は api.github.com にのみ送る
+    if (TOKEN && url.startsWith(API + '/')) h['Authorization'] = 'Bearer ' + TOKEN;
+    return h;
+  }
+
+  async function apiFetch(url, accept) {
+    if (!url.startsWith(API + '/')) throw new Error('許可されていない宛先');
+    const headers = authHeaders(url);
+    headers['Accept'] = accept || 'application/vnd.github+json';
+    const res = await fetch(url, {
+      method: 'GET',
+      headers,
+      credentials: 'omit',
+      cache: 'no-store',
+      redirect: 'error',       // リダイレクト先へAuthorizationが流れるのを防ぐ
+      referrerPolicy: 'no-referrer'
+    });
+    if (res.status === 401) throw new Error('認証エラー HTTP 401（トークンが無効か期限切れ）');
+    if (res.status === 403) throw new Error('権限エラー HTTP 403（Contents:read の付与対象を確認）');
+    if (res.status === 404) throw new Error('見つからない HTTP 404（対象・ref・パス、または権限）');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res;
+  }
+
+  const enc = new TextEncoder();
+  async function sha256Hex(bytes) {
+    const buf = await crypto.subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  function b64ToBytes(b64) {
+    const clean = b64.replace(/\s+/g, '');
+    const bin = atob(clean);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  // 生バイト列の取得。raw と JSON+Base64 の2経路を持ち、同じバイト列になることを前提にする。
+  // mode: 'raw' | 'json' | 'both'（both は両経路を取得して一致を確認する）
+  async function fetchBytes(repo, path, ref, mode) {
+    const url = API + '/repos/' + repo + '/contents/'
+      + path.split('/').map(encodeURIComponent).join('/') + '?ref=' + encodeURIComponent(ref);
+    const out = { raw: null, json: null, parity: null };
+    if (mode === 'raw' || mode === 'both') {
+      const res = await apiFetch(url, 'application/vnd.github.raw+json');
+      out.raw = new Uint8Array(await res.arrayBuffer());
+    }
+    if (mode === 'json' || mode === 'both') {
+      const res = await apiFetch(url, 'application/vnd.github+json');
+      const meta = await res.json();
+      if (meta.encoding === 'base64') out.json = b64ToBytes(meta.content);
+      else if (meta.encoding === 'none') throw new Error('JSON経路では取得できない大きさのファイル（encoding:none）。raw経路を使う');
+      else throw new Error('未知のencoding：' + meta.encoding);
+    }
+    if (mode === 'both') {
+      out.parity = out.raw.length === out.json.length && out.raw.every((b, i) => b === out.json[i]);
+    }
+    return out;
+  }
+
+  const utf8 = new TextDecoder('utf-8', { fatal: false });
+
+  // ===== サニタイズ（検証済みの処理を維持） =====
+  const DROP_ELEMENTS = ['script','noscript','iframe','object','embed','link','meta','base','form','input','button','select','textarea','style','template','svg','math'];
+  const ALLOWED_ATTR = { a:['href','title'], img:['src','alt','title','width','height'], td:['colspan','rowspan'], th:['colspan','rowspan'] };
+  const ALLOWED_TEXT_ALIGN = ['center','left','right'];
+  const CLASS_STYLE = { 'source-heading':'text-align: center;' };
+  const ADMIN_HEADINGS = ['構成メモ','相互リンク案','元素材情報','ハッシュタグ','制作メモ'];
+  const CONTENT_SELECTORS = ['#wix-article','#note-article','#article','article'];
+
+  function pickTextAlign(v) {
+    const m = /(?:^|;)\s*text-align\s*:\s*([a-z-]+)\s*(?:;|$)/i.exec(v || '');
+    if (!m) return null;
+    const a = m[1].toLowerCase();
+    return ALLOWED_TEXT_ALIGN.includes(a) ? 'text-align: ' + a + ';' : null;
+  }
+
+  function sanitize(htmlText) {
+    const report = [];
+    const doc = new DOMParser().parseFromString(htmlText, 'text/html');
+    let root = null, used = null;
+    for (const sel of CONTENT_SELECTORS) { const n = doc.querySelector(sel); if (n) { root = n; used = sel; break; } }
+    // 本番では body フォールバックを不合格にする（版の取り違え・生成器の仕様変更を見逃さないため）
+    if (!root) {
+      report.push(['ng', '本文領域が特定できない（#wix-article / #note-article / #article / article のいずれも無い）']);
+      return { container: null, report, regionFound: false, contaminated: null };
+    }
+    report.push(['ok', '本文領域：' + used]);
+
+    const clone = root.cloneNode(true);
+    let dropped = 0, attrsStripped = 0, urlsNeutralized = 0, alignKept = 0, alignRebuilt = 0;
+    clone.querySelectorAll(DROP_ELEMENTS.join(',')).forEach((el) => { el.remove(); dropped++; });
+
+    const walker = document.createTreeWalker(clone, NodeFilter.SHOW_ELEMENT);
+    const elements = [clone];
+    while (walker.nextNode()) elements.push(walker.currentNode);
+    for (const el of elements) {
+      const tag = el.tagName.toLowerCase();
+      const allow = ALLOWED_ATTR[tag] || [];
+      let keepAlign = pickTextAlign(el.getAttribute('style'));
+      if (keepAlign) alignKept++;
+      if (!keepAlign) {
+        for (const c of (el.getAttribute('class') || '').split(/\s+/)) if (CLASS_STYLE[c]) { keepAlign = CLASS_STYLE[c]; alignRebuilt++; break; }
+      }
+      for (const attr of Array.from(el.attributes)) {
+        const name = attr.name.toLowerCase();
+        if (!allow.includes(name)) { el.removeAttribute(attr.name); attrsStripped++; continue; }
+        if (name === 'href' || name === 'src') {
+          const v = attr.value.trim();
+          if (!/^(https?:|mailto:|#)/i.test(v)) { el.removeAttribute(attr.name); urlsNeutralized++; }
+        }
+      }
+      if (keepAlign) el.setAttribute('style', keepAlign);
+    }
+    report.push(['ok', '除去：要素' + dropped + '件／属性' + attrsStripped + '件（on*・id・class を含む）']);
+    report.push(['ok', '保持した中央寄せ：style由来' + alignKept + '件／class由来の再構成' + alignRebuilt + '件']);
+    if (urlsNeutralized) report.push(['warn', 'http(s)以外のURLを除去：' + urlsNeutralized + '件']);
+
+    const structure = {
+      見出し: clone.querySelectorAll('h2,h3,h4,h5').length, 太字: clone.querySelectorAll('strong,b').length,
+      リンク: clone.querySelectorAll('a[href]').length, 引用: clone.querySelectorAll('blockquote').length,
+      斜体: clone.querySelectorAll('em,i').length, 箇条書き: clone.querySelectorAll('li').length,
+      空段落: Array.from(clone.querySelectorAll('p')).filter((p) => !p.textContent.trim()).length,
+      改行: clone.querySelectorAll('br').length, 区切り線: clone.querySelectorAll('hr').length
+    };
+    report.push(['ok', '構造：' + Object.entries(structure).map(([k, v]) => k + ':' + v).join(' / ')]);
+
+    const hits = [];
+    clone.querySelectorAll('h1,h2,h3,h4,h5,h6,strong,p').forEach((el) => {
+      const t = (el.textContent || '').trim();
+      for (const k of ADMIN_HEADINGS) if (t === k || t === '**' + k + '**') hits.push(k);
+    });
+    const contaminated = hits.length > 0;
+    if (contaminated) report.push(['ng', '制作管理見出しがコピー対象に混入：' + [...new Set(hits)].join('、')]);
+    else report.push(['ok', '制作管理見出しの混入なし']);
+
+    const container = document.createElement('div');
+    container.appendChild(clone);
+    return { container, report, regionFound: true, contaminated };
+  }
+
+  // ===== 状態とゲート（fail-closed） =====
+  let state = null;
+  function resetContent(reason) {
+    state = null;
+    $('stage').innerHTML = '';
+    $('verify-report').innerHTML = '';
+    $('gate').innerHTML = '<span class="ng">コピー禁止</span>' + (reason ? '：' + reason : '');
+    $('copy-rich').disabled = true;
+    $('copy-fallback').disabled = true;
+    $('copy-status').textContent = '';
+  }
+  function applyGate(st, report) {
+    const ul = $('verify-report');
+    ul.innerHTML = '';
+    for (const [kind, text] of report) {
+      const li = document.createElement('li');
+      li.className = kind;
+      li.textContent = (kind === 'ok' ? '合格: ' : kind === 'ng' ? '不合格: ' : '注意: ') + text;
+      ul.appendChild(li);
+    }
+    const allow = st && st.hashVerified === 'match' && st.regionFound === true && st.contaminated === false;
+    $('copy-rich').disabled = !allow;
+    $('copy-fallback').disabled = !allow;
+    $('gate').innerHTML = allow
+      ? '<span class="ok">コピー可能</span>：ハッシュ一致・本文領域確定・混入なし'
+      : '<span class="ng">コピー禁止</span>：' + [
+          st && st.hashVerified === 'match' ? null : 'ハッシュ' + (st ? ({ mismatch: '不一致', missing: '一覧なし／対象なし', pending: '未完了' })[st.hashVerified] || '未完了' : '未完了'),
+          st && st.regionFound ? null : '本文領域が未確定',
+          st && st.contaminated === false ? null : (st && st.contaminated === null ? '混入検査が未実施' : '制作管理見出しの混入')
+        ].filter(Boolean).join(' / ');
+  }
+  resetContent('未取得');
+
+  // オリジン制限の適用（接続系UIを閉じる）
+  let NOTICE = '';
+  const showNotice = () => { $('conn-status').innerHTML = NOTICE; };
+  function lockOrigin() {
+    $('token').value = '';
+    $('token').disabled = true;
+    $('connect').disabled = true;
+    $('repo').disabled = true;
+    $('pm-user').disabled = true;
+    NOTICE = '<span class="ng">このオリジンでは接続できません。</span>'
+      + '<br>現在のオリジン：<span class="mono">' + location.origin + '</span>'
+      + '<br>共有オリジン（*.github.io）は同一アカウントの他のPagesプロジェクトとストレージを共有するため、'
+      + 'トークンの入力を受け付けません。専用オリジン（' + ALLOWED_HOSTS[0] + '）を確保してから接続してください。'
+      + '<br>このページでは、ダミー検証モードでの動作確認だけが可能です。';
+    showNotice();
+  }
+  if (!ORIGIN_OK) lockOrigin();
+
+  // ===== 接続：article/* ブランチの列挙 =====
+  async function connect() {
+    const status = $('conn-status');
+    if (!ORIGIN_OK) { status.innerHTML = '<span class="ng">専用オリジンではないため接続しません。</span>'; clearToken(); return; }
+    const repo = $('repo').value.trim();
+    const tok = $('token').value;
+    if (!tok) { status.innerHTML = '<span class="ng">トークンが未入力</span>'; return; }
+    setToken(tok);
+    $('token').value = '';          // DOMから即座に消す
+    status.textContent = '接続中…';
+    resetContent('記事未取得');
+    try {
+      const branches = [];
+      for (let page = 1; page <= 5; page++) {
+        const res = await apiFetch(API + '/repos/' + repo + '/branches?per_page=100&page=' + page);
+        const arr = await res.json();
+        branches.push(...arr.map((b) => b.name));
+        if (arr.length < 100) break;
+      }
+      const articles = branches.filter((n) => n.startsWith('article/')).sort();
+      const sel = $('branch');
+      sel.innerHTML = '';
+      if (!articles.length) { sel.innerHTML = '<option>article/* が無い</option>'; sel.disabled = true; throw new Error('article/* ブランチが見つからない'); }
+      for (const n of articles) { const o = document.createElement('option'); o.value = n; o.textContent = n; sel.appendChild(o); }
+      sel.disabled = false;
+      status.innerHTML = '<span class="ok">接続成功</span>：article/* ' + articles.length + '件（全' + branches.length + '件中）';
+      if (typeof autoSelect === 'function' && (new URLSearchParams(location.search)).get('branch')) await autoSelect();
+      else await onBranchChange();
+    } catch (e) {
+      clearToken();                 // 失敗時はトークンを破棄
+      $('branch').innerHTML = '<option>未接続</option>'; $('branch').disabled = true;
+      $('kind').innerHTML = '<option>未接続</option>'; $('kind').disabled = true;
+      $('load').disabled = true;
+      status.innerHTML = '<span class="ng">' + String(e.message).replace(/[<>&]/g, '') + '</span>';
+      resetContent('接続失敗');
+    }
+  }
+
+  // ===== 記事選択：HEADのSHAを固定し、docs/<slug>/ の実在を確認 =====
+  let pinned = null;   // { repo, branch, sha, dir, files, hashesPath }
+  async function onBranchChange() {
+    const status = $('load-status');
+    const repo = $('repo').value.trim();
+    const branch = $('branch').value;
+    $('kind').disabled = true; $('load').disabled = true;
+    $('kind').innerHTML = '<option>確認中…</option>';
+    resetContent('記事未取得');
+    pinned = null;
+    try {
+      // 1) ブランチHEADのコミットSHAを取得して固定する
+      const res = await apiFetch(API + '/repos/' + repo + '/branches/' + encodeURIComponent(branch));
+      const info = await res.json();
+      const sha = info.commit && info.commit.sha;
+      if (!sha) throw new Error('HEADのコミットSHAを取得できない');
+
+      // 2) docs/<slug>/ の実在をディレクトリ一覧で確認する（名前の推測で表示しない）
+      const slug = branch.replace(/^article\//, '');
+      const dir = 'docs/' + slug;
+      const listRes = await apiFetch(API + '/repos/' + repo + '/contents/'
+        + dir.split('/').map(encodeURIComponent).join('/') + '?ref=' + encodeURIComponent(sha));
+      const entries = await listRes.json();
+      if (!Array.isArray(entries)) throw new Error(dir + ' がディレクトリではない');
+      const names = entries.filter((e) => e.type === 'file').map((e) => e.name);
+
+      const note = names.filter((n) => /_note-copy\.html$/.test(n));
+      const wix = names.filter((n) => /_wix-copy\.html$/.test(n));
+      const hashes = names.includes('deliverable-hashes.json') ? 'deliverable-hashes.json' : null;
+
+      const sel = $('kind');
+      sel.innerHTML = '';
+      for (const n of note) { const o = document.createElement('option'); o.value = n; o.textContent = 'note用：' + n; sel.appendChild(o); }
+      for (const n of wix) { const o = document.createElement('option'); o.value = n; o.textContent = 'Wix用：' + n; sel.appendChild(o); }
+      if (!sel.options.length) { sel.innerHTML = '<option>対象のHTMLが無い</option>'; throw new Error(dir + ' にコピー用HTMLが無い'); }
+      sel.disabled = false; $('load').disabled = false;
+      pinned = { repo, branch, sha, dir, names, hashesPath: hashes };
+      status.innerHTML = '固定したコミット <span class="mono">' + sha + '</span>／' + dir + ' のファイル' + names.length + '件'
+        + (hashes ? '' : ' <span class="ng">（deliverable-hashes.json が無い＝コピー禁止）</span>');
+    } catch (e) {
+      status.innerHTML = '<span class="ng">' + String(e.message).replace(/[<>&]/g, '') + '</span>';
+      resetContent('記事情報の取得に失敗');
+    }
+    document.body.dataset.pickRun = String(Number(document.body.dataset.pickRun || 0) + 1);
+  }
+
+  // ===== 取得と検証 =====
+  async function loadAndVerify() {
+    const status = $('load-status');
+    resetContent('検証中');
+    if (!pinned) { status.innerHTML = '<span class="ng">記事が未選択</span>'; return; }
+    const { repo, sha, dir, hashesPath } = pinned;
+    const file = $('kind').value;
+    const st = { hashVerified: 'pending', regionFound: false, contaminated: null };
+    const report = [];
+    try {
+      report.push(['ok', '固定コミット：' + sha]);
+      if (!hashesPath) { st.hashVerified = 'missing'; report.push(['ng', 'deliverable-hashes.json が同じコミットに無い']); }
+
+      // 1) HTMLの生バイト列（raw と JSON+Base64 の両経路で取得し、バイト一致を確認）
+      const got = await fetchBytes(repo, dir + '/' + file, sha, 'both');
+      report.push([got.parity ? 'ok' : 'ng',
+        'raw経路とJSON(Base64)経路のバイト一致：' + (got.parity ? '一致' : '不一致') + '（raw ' + got.raw.length + 'バイト／json ' + got.json.length + 'バイト）']);
+      if (!got.parity) throw new Error('2経路のバイト列が一致しない');
+      const bytes = got.raw;
+      const digest = await sha256Hex(bytes);
+      report.push(['ok', '取得したHTMLのSHA-256：' + digest]);
+
+      // 2) 同じコミットのハッシュ一覧と照合
+      if (hashesPath) {
+        const hb = await fetchBytes(repo, dir + '/' + hashesPath, sha, 'raw');
+        let table;
+        try { table = JSON.parse(utf8.decode(hb.raw)); } catch (e) { table = null; }
+        if (!table || typeof table !== 'object') { st.hashVerified = 'missing'; report.push(['ng', 'ハッシュ一覧を解釈できない']); }
+        else {
+          const expected = table[file];
+          if (!expected) { st.hashVerified = 'missing'; report.push(['ng', 'ハッシュ一覧に ' + file + ' の項目が無い']); }
+          else if (String(expected).toLowerCase() === digest) { st.hashVerified = 'match'; report.push(['ok', 'ハッシュ一致（一覧の値と同一）']); }
+          else { st.hashVerified = 'mismatch'; report.push(['ng', 'ハッシュ不一致：一覧 ' + expected + ' ／ 実測 ' + digest]); }
+        }
+      }
+
+      // 3) サニタイズと品質検査（ハッシュ一致は品質合格ではないので別に行う）
+      const text = utf8.decode(bytes);
+      const san = sanitize(text);
+      report.push(...san.report);
+      st.regionFound = san.regionFound;
+      st.contaminated = san.contaminated;
+      if (san.container) { $('stage').appendChild(san.container); state = { node: san.container }; }
+
+      status.innerHTML = '取得' + bytes.length + 'バイト／検証完了';
+    } catch (e) {
+      report.push(['ng', '取得または検証に失敗：' + e.message]);
+      $('stage').innerHTML = '';     // 本文とコピー対象を消去
+      state = null;
+      status.innerHTML = '<span class="ng">' + String(e.message).replace(/[<>&]/g, '') + '</span>';
+      if (/401|403/.test(e.message)) clearToken();
+    }
+    applyGate(st, report);
+    // 検証完了の印（自動検証用。値は回数のみで、内容を含まない）
+    document.body.dataset.verifyRun = String(Number(document.body.dataset.verifyRun || 0) + 1);
+  }
+
+  // ===== ダミー検証モード（トークン不要。検証経路は非公開リポジトリ版と同一） =====
+  const DUMMY_FILES = ['dummy-dialogue_note-copy.html', 'dummy-essay_wix-copy.html', 'dummy-contaminated.html'];
+
+  async function plainBytes(url) {
+    const res = await fetch(url, { cache: 'no-store', credentials: 'omit', redirect: 'error' });
+    if (!res.ok) throw new Error('HTTP ' + res.status + '（' + url + '）');
+    return new Uint8Array(await res.arrayBuffer());
+  }
+
+  function fillDummyList() {
+    const sel = $('kind');
+    sel.innerHTML = '';
+    for (const n of DUMMY_FILES) { const o = document.createElement('option'); o.value = n; o.textContent = n; sel.appendChild(o); }
+    sel.disabled = false;
+    $('load').disabled = false;
+    $('branch').innerHTML = '<option>ダミー（ブランチなし）</option>';
+    $('branch').disabled = true;
+    $('load-status').textContent = 'ダミー検証モード。ハッシュ一覧は app/dummy-hashes.json。';
+  }
+
+  async function loadDummy() {
+    const status = $('load-status');
+    resetContent('検証中');
+    const file = $('kind').value;
+    const st = { hashVerified: 'pending', regionFound: false, contaminated: null };
+    const report = [['ok', 'ダミー検証モード（認証なし・相対パス取得）']];
+    try {
+      const bytes = await plainBytes('../fixtures/' + file);
+      const digest = await sha256Hex(bytes);
+      report.push(['ok', '取得したHTMLのSHA-256：' + digest]);
+      let table = null;
+      try { table = JSON.parse(utf8.decode(await plainBytes('./dummy-hashes.json'))); } catch (e) { table = null; }
+      if (!table || typeof table !== 'object') { st.hashVerified = 'missing'; report.push(['ng', 'ハッシュ一覧を取得・解釈できない']); }
+      else if (!table[file]) { st.hashVerified = 'missing'; report.push(['ng', 'ハッシュ一覧に ' + file + ' の項目が無い']); }
+      else if (String(table[file]).toLowerCase() === digest) { st.hashVerified = 'match'; report.push(['ok', 'ハッシュ一致（一覧の値と同一）']); }
+      else { st.hashVerified = 'mismatch'; report.push(['ng', 'ハッシュ不一致：一覧 ' + table[file] + ' ／ 実測 ' + digest]); }
+
+      const san = sanitize(utf8.decode(bytes));
+      report.push(...san.report);
+      st.regionFound = san.regionFound;
+      st.contaminated = san.contaminated;
+      if (san.container) { $('stage').appendChild(san.container); state = { node: san.container }; }
+      status.textContent = '取得' + bytes.length + 'バイト／検証完了（ダミー）';
+    } catch (e) {
+      report.push(['ng', '取得または検証に失敗：' + e.message]);
+      $('stage').innerHTML = ''; state = null;
+      status.innerHTML = '<span class="ng">' + String(e.message).replace(/[<>&]/g, '') + '</span>';
+    }
+    applyGate(st, report);
+    document.body.dataset.verifyRun = String(Number(document.body.dataset.verifyRun || 0) + 1);
+  }
+
+  function syncSource() {
+    const mode = $('source').value;
+    const gh = mode === 'github';
+    $('auth-form').hidden = !gh;
+    $('connect').hidden = !gh;
+    $('disconnect').hidden = !gh;
+    if (gh) {
+      $('branch').disabled = true; $('kind').disabled = true; $('load').disabled = true;
+      $('kind').innerHTML = '<option>未接続</option>';
+      $('branch').innerHTML = '<option>未接続</option>';
+      pinned = null;
+      resetContent('未取得');
+      if (!ORIGIN_OK) lockOrigin();
+      else showNotice();
+    } else {
+      clearToken();
+      showNotice();
+      pinned = null;
+      resetContent('未取得');
+      fillDummyList();
+    }
+  }
+
+  // ===== コピー（ゲートを通った場合のみ） =====
+  const richHtml = () => '<meta charset="utf-8">' + (state ? state.node.innerHTML : '');
+  const plainText = () => state ? state.node.innerText : '';
+  const gateOpen = () => !$('copy-rich').disabled;
+
+  async function copyRich() {
+    const s = $('copy-status');
+    if (!gateOpen() || !state) { s.textContent = '検証を通過していないためコピーできません。'; return; }
+    if (!(caps.secureContext && caps.clipboardWrite && caps.clipboardItem)) { s.textContent = 'この環境ではHTML方式が使えません。フォールバックを試してください。'; return; }
+    try {
+      await navigator.clipboard.write([new ClipboardItem({
+        'text/html': new Blob([richHtml()], { type: 'text/html' }),
+        'text/plain': new Blob([plainText()], { type: 'text/plain' })
+      })]);
+      s.textContent = 'コピーAPIが正常終了しました（書式保持は貼り付け後に確認してください）。';
+    } catch (e) { s.textContent = 'HTML方式が失敗：' + e.message + ' / フォールバックを試してください。'; }
+  }
+
+  function copyFallback() {
+    const s = $('copy-status');
+    if (!gateOpen() || !state) { s.textContent = '検証を通過していないためコピーできません。'; return; }
+    let included = false;
+    const onCopy = (ev) => {
+      if (!ev.clipboardData) return;
+      ev.clipboardData.setData('text/html', richHtml());
+      ev.clipboardData.setData('text/plain', plainText());
+      included = true; ev.preventDefault();
+    };
+    document.addEventListener('copy', onCopy, true);
+    const r = document.createRange(); r.selectNodeContents(state.node);
+    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    document.removeEventListener('copy', onCopy, true);
+    if (ok && included) { s.textContent = 'フォールバックでHTML形式を渡しました（execCommand:true / copyイベント:true）。'; sel.removeAllRanges(); }
+    else { s.textContent = 'フォールバック不成立（execCommand:' + ok + ' / copyイベント:' + included + '）。本文を選択したので、端末の「コピー」を使ってください。'; }
+  }
+
+  $('paste-check').addEventListener('paste', (ev) => {
+    const cd = ev.clipboardData, rep = $('paste-report');
+    if (!cd) { rep.textContent = 'clipboardDataを読めませんでした。'; return; }
+    const html = cd.getData('text/html'), text = cd.getData('text/plain');
+    if (!html) { rep.innerHTML = '<span class="ng">不合格: HTML形式なし</span>（text/plain ' + (text ? text.length + '字' : 'なし') + '）'; return; }
+    const d = new DOMParser().parseFromString(html, 'text/html');
+    const n = (q) => d.body.querySelectorAll(q).length;
+    const counts = {
+      見出し: n('h2,h3,h4,h5'), 太字: n('strong,b'), リンク: n('a[href]'), 引用: n('blockquote'),
+      斜体: n('em,i'), 箇条書き: n('li'),
+      中央寄せ: Array.from(d.body.querySelectorAll('[style]')).filter((e) => /text-align\s*:\s*center/i.test(e.getAttribute('style'))).length,
+      空段落: Array.from(d.body.querySelectorAll('p')).filter((p) => !p.textContent.trim()).length, 改行: n('br')
+    };
+    const missing = ['見出し','太字','リンク','引用'].filter((k) => counts[k] === 0);
+    rep.innerHTML = (missing.length ? '<span class="ng">不合格: ' + missing.join('、') + 'が0件</span>'
+      : '<span class="ok">合格: 見出し・太字・リンク・引用がすべて1件以上</span>')
+      + '　HTML形式あり（' + html.length + '字） ' + Object.entries(counts).map(([k, v]) => k + ':' + v).join(' / ');
+  });
+
+  // ===== 納品報告のURLから記事を指定する（機密は受け取らない） =====
+  const QS = new URLSearchParams(location.search);
+  const WANT = { repo: QS.get('repo'), branch: QS.get('branch'), kind: QS.get('kind') };
+  // token / pat / authorization 等はクエリから受け取らない
+  for (const forbidden of ['token', 'pat', 'password', 'authorization', 'auth']) {
+    if (QS.has(forbidden)) {
+      NOTICE += (NOTICE ? '<br>' : '') + '<span class="ng">URLに認証情報が含まれています。この欄からは受け取りません。URLを破棄してください。</span>';
+    }
+  }
+  if (WANT.repo) $('repo').value = WANT.repo;
+
+  async function autoSelect() {
+    if (!WANT.branch) return;
+    const b = Array.from($('branch').options).find((o) => o.value === WANT.branch);
+    if (!b) { $('load-status').innerHTML = '<span class="warn">URLで指定された ' + WANT.branch.replace(/[<>&]/g, '') + ' が見つかりません。一覧から選んでください。</span>'; return; }
+    $('branch').value = WANT.branch;
+    await onBranchChange();
+    if (!WANT.kind) return;
+    const want = WANT.kind.toLowerCase();
+    const match = Array.from($('kind').options).find((o) =>
+      o.value === WANT.kind || (want === 'note' && /_note-copy\.html$/.test(o.value)) || (want === 'wix' && /_wix-copy\.html$/.test(o.value)));
+    if (!match) { $('load-status').innerHTML += ' <span class="warn">指定形式が見つかりません。</span>'; return; }
+    $('kind').value = match.value;
+    if (!$('load').disabled) await loadAndVerify();
+  }
+
+  $('connect').addEventListener('click', connect);
+  $('disconnect').addEventListener('click', () => {
+    clearToken();
+    $('branch').innerHTML = '<option>未接続</option>'; $('branch').disabled = true;
+    $('kind').innerHTML = '<option>未接続</option>'; $('kind').disabled = true;
+    $('load').disabled = true; pinned = null;
+    $('conn-status').textContent = '切断しました（トークンを破棄）。';
+    resetContent('切断');
+  });
+  $('branch').addEventListener('change', onBranchChange);
+  $('load').addEventListener('click', () => ($('source').value === 'github' ? loadAndVerify() : loadDummy()));
+  $('source').addEventListener('change', syncSource);
+  if ((new URLSearchParams(location.search)).get('branch')) $('source').value = 'github';
+  syncSource();
+  showNotice();
+  $('copy-rich').addEventListener('click', copyRich);
+  $('copy-fallback').addEventListener('click', copyFallback);
+})();
+</script>
+</body>
+</html>
