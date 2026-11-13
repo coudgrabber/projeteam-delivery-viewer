@@ -1,0 +1,15 @@
+name = "projeteam-secure-delivery"
+main = "./worker.mjs"
+compatibility_date = "2026-11-01"
+workers_dev = false
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = true
+
+# No [vars] secrets or live domain here.
+# Supply DELIVERY_ORIGIN, CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD, ALLOWED_EMAILS,
+# SOURCE_REPO, DELIVERY_RELEASES_JSON, GITHUB_APP_ID, GITHUB_INSTALLATION_ID
+# through the deployment environment; set GITHUB_APP_PRIVATE_KEY_PKCS8 as a secret.
+# Configure an explicitly protected custom domain and Cloudflare Access application.
