@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Projeteam 納品ビューア</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<main>
+<h1>Projeteam 納品ビューア</h1>
+<p>認証済みの確定版のみを取得し、内容とハッシュを確認してからコピーできます。</p>
+<div id="status" role="status" aria-live="polite">接続を確認しています。</div>
+<section aria-labelledby="choose">
+<h2 id="choose">納品物の選択</h2>
+<label>確定版 <select id="release" disabled><option>読込中</option></select></label>
+<label>出力先 <select id="format"><option value="note">対話版（note）</option><option value="wix">散文版（Wix）</option></select></label>
+<button id="load" disabled>確定版を読み込む</button>
+</section>
+<section aria-labelledby="copy-title">
+<h2 id="copy-title">本文のコピー</h2>
+<button id="copy" disabled>書式付き本文をコピー</button>
+<button id="fallback" disabled>代替コピー方式</button>
+<p id="copy-status" role="status" aria-live="polite"></p>
+<div id="preview" aria-label="記事本文プレビュー"></div>
+</section>
+<section aria-labelledby="paste-title">
+<h2 id="paste-title">コピー形式の確認</h2>
+<p>コピー後、次の欄に貼り付けてください。その後noteまたはWixの編集画面で書式を確認してください。</p>
+<div id="paste-report" role="status" aria-live="polite">未検査</div>
+<div id="paste-check" contenteditable="true" role="textbox" aria-label="貼り付け検査欄"></div>
+</section>
+</main>
+</body>
+</html>
