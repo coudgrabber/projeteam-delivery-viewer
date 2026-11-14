@@ -71,9 +71,26 @@ node --test test/worker.test.mjs
 ## 状態
 
 - GitHub専用ブランチの実装・テストソース：作成済み
-- Nodeテストの実行：未実施（GitHubコネクタからは実行できない）
-- Workers実機、Cloudflare Access、GitHub App動作：未検証
+- GitHub Actions Node単体テスト：6件合格（2026-11-14）
+- GitHub Actions Chromium実ブラウザテスト：5件合格（2026-11-14、合成したダミーHTMLによる検証）
+- Cloudflare Workers本番実機、AccessとGitHub Appの実認証：未検証
 - GitHub App作成、DNS、秘密情報登録、デプロイ：未実施
 - noteの既存確定HTMLを手動ブラウザ取得で貼付：利用者が4書式の保持を確認済み
 
-**重要：この試作を本番用としてそのままデプロイしない。** 上のテスト実行・実機セキュリティレビュー・認証設定後、段階的に動作確認すること。
+## 本番接続前の検証条件
+
+1. Cloudflareに利用者アカウントと独立したカスタムドメインを用意する。Cloudflare Access の自己ホスト型アプリで全パスを保護し、対象メールのみ許可。Accessポリシーとは別にWorkerがJWTを照合する。
+2. GitHub Appを **対象1リポジトリ** にインストールし、Contents: readのみを許可。キーと数値IDをWorkerの非公開環境に保管。GitHub Appのリポジトリ権限と一時トークンのリポジトリ制限を別々に確認する。
+3. GitHub App認証、Accessのログイン・セッション失効、未承認ユーザー、未承認commit、ハッシュ不一致、キャッシュ無効化を本物の環境で検証する。Workerの全パス認証とカスタムドメインの配線も確認する。
+4. 本番記事 `democracy-criteria` の確定SHAを許可リストに登録する場合も、配信内容が未公開記事であることを踏まえ、認証完了まで第三者に配信しない。
+5. noteとWixの実編集画面で書式が保持されるかユーザーが確認。公開操作は別途判断する。
+
+## 自動検証（2026-11-14確認）
+
+GitHub Actions `Secure delivery unit tests`：
+- Node 22での構文検証と単体テスト6件：合格
+- Chromiumでのブラウザ・Clipboard API・HTML安全化・fail-closedのテスト5件：合格
+- ブラウザ試験はダミーHTMLを使い、秘密情報・非公開記事は公開リポジトリに保存していない
+- 実環境への統合試験（Cloudflare Access・GitHub App・Safari・Wix）：未実施
+
+**重要：本番接続と秘密情報の設定は、この実装ブランチのコード変更とは別の作業であり、まだ行っていない。**
