@@ -81,6 +81,7 @@ test('real Chromium renders all four note formats and transfers rich HTML to cli
   assert.equal(await page.locator('#preview blockquote').innerText(),'Quote');
   assert.equal(await page.locator('#preview a').getAttribute('href'),'https://example.org/link');
   await page.locator('#copy').click();
+  await page.waitForFunction(() => document.querySelector('#copy-status').textContent.trim().length > 0);
   assert.match(await page.locator('#copy-status').innerText(),/コピーAPIに渡しました/);
   const clipboard=await page.evaluate(async()=>{
     const contents=await navigator.clipboard.read();
