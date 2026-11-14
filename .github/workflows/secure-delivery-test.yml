@@ -27,5 +27,28 @@ jobs:
           node --check secure-delivery/worker.mjs
           node --check secure-delivery/public/app.js
           node --check secure-delivery/test/worker.test.mjs
+          node --check secure-delivery/test/browser.test.mjs
       - name: Run isolated security and integrity tests
         run: node --test secure-delivery/test/worker.test.mjs
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: secure-delivery
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned Playwright
+        run: npm install --no-save --no-audit --no-fund playwright@1.65.0
+      - name: Install Chromium and runtime dependencies
+        run: npx playwright install --with-deps chromium
+      - name: Run real Chromium browser security and paste tests
+        run: node --test test/browser.test.mjs
