@@ -5,7 +5,7 @@
 
 ## 設計
 
-1. 独立した専用オリジン（HTTPS）に Cloudflare Worker と静的サイトを配置し、Cloudflare Access のアプリケーションポリシーで **全パス** を認証必須にする。
+1. Cloudflare Worker と静的サイトを専用の `workers.dev` URLに配置し、Cloudflare Access の **Worker単位・All traffic** 保護を有効にして本番URL・プレビューURLを認証必須にする。独自ドメインは初期構築に不要。
 2. Worker 自身も `Cf-Access-Jwt-Assertion` を Cloudflare公開鍵によって RS256 検証。issuer / audience / 有効期限 / 許可メールを検証し、認証されないアクセスは拒否。
 3. Worker だけが GitHub App の秘密鍵を保有し、GitHub App installation token（Contents:readのみ、かつ `SOURCE_REPO` のリポジトリ名に限定）を都度取得。ブラウザには渡さない。GitHub App自体のインストール範囲も指定リポジトリ1件に制限する。
 4. 管理者が設定した記事slugと40桁コミットSHAの**許可リスト**のみ取得できる。ブランチ名や任意パスはユーザー入力に使わない。
@@ -16,17 +16,17 @@
 
 ## 管理者が行う事前準備（**未実施**）
 
-- 独立したHTTPSドメイン／Cloudflare Workers環境の用意（共有 `*.github.io` でGitHub PATを入力する既存の試作コードは本番で使わない）。
+- Cloudflare WorkersとZero Trustが使えるアカウントの用意。初期接続は専用の `*.workers.dev` URLを使用し、独自ドメインの購入やDNS移管は不要（共有 `*.github.io` でGitHub PATを入力する既存の試作コードは本番で使わない）。
 - GitHub Appを作成し、**Repository permissions: Contents: Read-only**、インストール先は `coudgrabber/projeteam-blog` **1リポジトリだけ**を指定。不要な権限は付けない。
 - GitHub App の **App ID、Installation ID、PKCS#8 RSA private key** を準備。GitHubのPEMが `BEGIN RSA PRIVATE KEY` 形式の場合は、オフラインでPKCS#8 `BEGIN PRIVATE KEY` 形式に変換する。秘密鍵をGitHubへcommitしない。
-- Cloudflare Accessに専用アプリケーションを作成し、ユーザーID・メールを明示した許可ポリシーを設定する。全パスにAccessポリシーを適用。
-- Workerの本番カスタムドメインとAccess保護範囲を必ず照合。キャッシュとWeb解析が非公開記事を保存しないことを確認。
+- Cloudflare Workers & Pages → 対象Worker → Access → Protect this Worker behind Access → **All traffic** から保護する。認証対象のメールアドレスを明示して許可ポリシーを設定し、**本番URLとプレビューURLを両方**保護する。
+- Workerの `workers.dev` URL とAccess保護範囲を照合。キャッシュとWeb解析が非公開記事を保存しないことを確認。
 
 ## 環境変数（例示値だけ）
 
 | 名前 | 例／内容 |
 |---|---|
-| `DELIVERY_ORIGIN` | `https://delivery.example.org`（オリジンと完全一致） |
+| `DELIVERY_ORIGIN` | `https://projeteam-secure-delivery.<account-subdomain>.workers.dev`（デプロイ後に実URLと完全一致させる） |
 | `CF_ACCESS_TEAM_DOMAIN` | `your-team.cloudflareaccess.com` |
 | `CF_ACCESS_AUD` | AccessアプリのAUDタグ |
 | `ALLOWED_EMAILS` | `writer@example.org`（カンマ区切り） |
@@ -79,9 +79,9 @@ node --test test/worker.test.mjs
 
 ## 本番接続前の検証条件
 
-1. Cloudflareに利用者アカウントと独立したカスタムドメインを用意する。Cloudflare Access の自己ホスト型アプリで全パスを保護し、対象メールのみ許可。Accessポリシーとは別にWorkerがJWTを照合する。
+1. Cloudflareに利用者アカウント（Workers + Zero Trust）を用意する。初期は独自ドメイン不要の `workers.dev` URLを利用する。Workers & Pages → 対象Worker → Access → **Protect this Worker behind Access → All traffic** で保護し、対象メールだけを許可。Accessポリシーとは別にWorkerがJWTを照合する。
 2. GitHub Appを **対象1リポジトリ** にインストールし、Contents: readのみを許可。キーと数値IDをWorkerの非公開環境に保管。GitHub Appのリポジトリ権限と一時トークンのリポジトリ制限を別々に確認する。
-3. GitHub App認証、Accessのログイン・セッション失効、未承認ユーザー、未承認commit、ハッシュ不一致、キャッシュ無効化を本物の環境で検証する。Workerの全パス認証とカスタムドメインの配線も確認する。
+3. GitHub App認証、Accessのログイン・セッション失効、未承認ユーザー、未承認commit、ハッシュ不一致、キャッシュ無効化を本物の環境で検証する。`workers.dev` の本番・プレビュー双方における全パス認証を確認する。
 4. 本番記事 `democracy-criteria` の確定SHAを許可リストに登録する場合も、配信内容が未公開記事であることを踏まえ、認証完了まで第三者に配信しない。
 5. noteとWixの実編集画面で書式が保持されるかユーザーが確認。公開操作は別途判断する。
 
