@@ -1,0 +1,31 @@
+name: Secure delivery unit tests
+on:
+  push:
+    branches:
+      - feature/authenticated-delivery-worker
+    paths:
+      - 'secure-delivery/**'
+      - '.github/workflows/secure-delivery-test.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify JS syntax
+        run: |
+          node --check secure-delivery/worker.mjs
+          node --check secure-delivery/public/app.js
+          node --check secure-delivery/test/worker.test.mjs
+      - name: Run isolated security and integrity tests
+        run: node --test secure-delivery/test/worker.test.mjs
