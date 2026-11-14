@@ -39,6 +39,7 @@ function mockGitHub(expected,overrideHash=false) {
     if (url.endsWith('/access_tokens')) {
       assert.equal(opt.method,'POST');
       assert.match(opt.headers.Authorization,/^Bearer /);
+      assert.deepEqual(JSON.parse(opt.body),{permissions:{contents:'read'},repositories:['private-blog']});
       return Response.json({token:'temporary-test-token'});
     }
     assert.match(url,/^https:\/\/api\.github\.com\/repos\/owner\/private-blog\/contents\//);
