@@ -1,7 +1,7 @@
 name = "projeteam-secure-delivery"
 main = "./worker.mjs"
 compatibility_date = "2026-11-01"
-workers_dev = false
+workers_dev = true
 
 [assets]
 directory = "./public"
@@ -12,4 +12,7 @@ run_worker_first = true
 # Supply DELIVERY_ORIGIN, CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD, ALLOWED_EMAILS,
 # SOURCE_REPO, DELIVERY_RELEASES_JSON, GITHUB_APP_ID, GITHUB_INSTALLATION_ID
 # through the deployment environment; set GITHUB_APP_PRIVATE_KEY_PKCS8 as a secret.
-# Configure an explicitly protected custom domain and Cloudflare Access application.
+# Initial deployment uses a dedicated workers.dev hostname (no custom DNS required).
+# IMPORTANT: Protect this Worker with Cloudflare Access: ALL TRAFFIC, including previews.
+# The Worker additionally validates the Access JWT and denies any unauthenticated requests.
+# A custom domain may be added after end-to-end validation.
