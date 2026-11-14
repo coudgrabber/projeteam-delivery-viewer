@@ -129,7 +129,7 @@ async function githubToken(env, fetcher) {
       'User-Agent': 'projeteam-private-delivery',
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ permissions: { contents: 'read' } }),
+    body: JSON.stringify({ permissions: { contents: 'read' }, repositories: [gitRepo(env).split('/')[1]] }),
     credentials: 'omit', redirect: 'error', cache: 'no-store'
   });
   if (!resp.ok) throw new Error('GitHub installation authentication failed');
