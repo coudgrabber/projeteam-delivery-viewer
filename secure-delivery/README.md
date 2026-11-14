@@ -7,7 +7,7 @@
 
 1. 独立した専用オリジン（HTTPS）に Cloudflare Worker と静的サイトを配置し、Cloudflare Access のアプリケーションポリシーで **全パス** を認証必須にする。
 2. Worker 自身も `Cf-Access-Jwt-Assertion` を Cloudflare公開鍵によって RS256 検証。issuer / audience / 有効期限 / 許可メールを検証し、認証されないアクセスは拒否。
-3. Worker だけが GitHub App の秘密鍵を保有し、GitHub App installation token（Contents:readのみ）を都度取得。ブラウザには渡さない。
+3. Worker だけが GitHub App の秘密鍵を保有し、GitHub App installation token（Contents:readのみ、かつ `SOURCE_REPO` のリポジトリ名に限定）を都度取得。ブラウザには渡さない。GitHub App自体のインストール範囲も指定リポジトリ1件に制限する。
 4. 管理者が設定した記事slugと40桁コミットSHAの**許可リスト**のみ取得できる。ブランチ名や任意パスはユーザー入力に使わない。
 5. プライベートGitHubの `docs/<slug>/deliverable-hashes.json` と対応するHTMLファイルを同一の固定コミットから取得。バイト列の SHA-256 一致後だけ配信する。
 6. ブラウザでは既知の `article#note-article` または `article#wix-article` だけを取り出し、タグ・属性のホワイトリストでDOMを再構築する。原HTMLのスクリプトは実行しない。
