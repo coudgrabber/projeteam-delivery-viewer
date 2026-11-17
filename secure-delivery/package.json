@@ -1,0 +1,14 @@
+{
+  "name": "projeteam-secure-delivery",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test test/worker.test.mjs",
+    "test:browser": "node --test test/browser.test.mjs",
+    "check": "node scripts/check-config.mjs",
+    "build": "wrangler deploy --dry-run --outdir artifacts/worker",
+    "diagnose": "node scripts/diagnose.mjs"
+  },
+  "devDependencies": { "playwright": "1.65.0", "wrangler": "4.164.0" }
+}

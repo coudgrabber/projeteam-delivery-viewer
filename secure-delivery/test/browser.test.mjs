@@ -26,6 +26,7 @@ const dangerous = '<!doctype html><html><body><article id="note-article">'+
   '<svg onload="window.evil=3"><circle r="4"/></svg>'+
   '<button>Fake control</button><img src="data:image/png;base64,AAAA" onerror="window.evil=4"></p>'+
   '</article></body></html>';
+const extended = '<article id="wix-article"><h2>日本語の見出し</h2><p><strong>太字</strong><em>斜体</em><u>下線</u><br>次の行</p><ul><li>項目一</li><li>項目二</li></ul><table><tr><th colspan="2" style="color:red">表題</th></tr><tr><td rowspan="999">セル</td><td>値</td></tr></table><a href="data:text/html,evil">データ</a><a href="//evil.example">相対</a></article>';
 const doubled = note.replace('</body>', '<article id="note-article"><p>duplicate</p></article></body>');
 const digest = data => createHash('sha256').update(data).digest('hex');
 let mode='note';
@@ -41,9 +42,13 @@ before(async()=>{
     if(url.pathname==='/api/releases') return send(200,{releases:[{slug:'test-article',commit}]});
     if(url.pathname==='/api/article'){
       const format=url.searchParams.get('format');
-      const html=mode==='dangerous'?dangerous:mode==='duplicate'?doubled:format==='wix'?wix:note;
+      if (mode==='unauthorized') return send(401,{error:'denied'});
+      const html=mode==='extended'?extended:mode==='dangerous'?dangerous:mode==='duplicate'?doubled:format==='wix'?wix:note;
       const hash=mode==='hash-mismatch'?'0'.repeat(64):digest(html);
-      return send(200,{slug:'test-article',commit,format,sha256:hash,html});
+      const payload={slug:'test-article',commit,format,sha256:hash,html};
+      if(mode==='wrong-identity') payload.commit='b'.repeat(40);
+      if(mode==='delayed') return setTimeout(()=>send(200,payload),300);
+      return send(200,payload);
     }
     if(files[url.pathname]){
       const [type,bytes]=files[url.pathname];
@@ -53,7 +58,7 @@ before(async()=>{
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   address='http://127.0.0.1:'+server.address().port;
-  browser=await chromium.launch({headless:true});
+  browser=await chromium.launch({headless:true, ...(process.env.CHROMIUM_EXECUTABLE_PATH ? {executablePath:process.env.CHROMIUM_EXECUTABLE_PATH} : {})});
   context=await browser.newContext({permissions:['clipboard-read','clipboard-write']});
   page=await context.newPage();
 });
@@ -133,4 +138,58 @@ test('duplicate article roots fail closed',async()=>{
   await openAndLoad();
   assert.equal(await page.locator('#copy').isEnabled(),false);
   assert.equal(await page.locator('#preview').innerText(),'');
+});
+
+test('Wix rich copy preserves Japanese, lists, tables and safe attributes through paste',async()=>{
+  mode='extended';
+  await openAndLoad('wix');
+  assert.equal(await page.locator('#preview li').count(),2);
+  assert.equal(await page.locator('#preview th').getAttribute('colspan'),'2');
+  assert.equal(await page.locator('#preview th').getAttribute('style'),null);
+  assert.equal(await page.locator('#preview td').first().getAttribute('rowspan'),null);
+  assert.deepEqual(await page.locator('#preview a').evaluateAll(els=>els.map(e=>e.getAttribute('href'))),[null,null]);
+  await page.locator('#copy').click();
+  await page.waitForFunction(()=>document.querySelector('#copy-status').textContent.includes('コピーAPIに渡しました'));
+  const html=await page.evaluate(async()=> (await (await (await navigator.clipboard.read())[0].getType('text/html')).text()));
+  assert.match(html,/日本語の見出し/);
+  assert.match(html,/<ul>/);
+  assert.match(html,/<table>/);
+  assert.match(html,/<u>下線<\/u>/);
+  await page.locator('#paste-check').focus();
+  await page.keyboard.press('ControlOrMeta+V');
+  await page.waitForFunction(()=>document.querySelector('#paste-report').textContent.includes('HTML形式を検出'));
+});
+test('fallback writes both clipboard formats',async()=>{
+  mode='note';
+  await openAndLoad();
+  await page.locator('#fallback').click();
+  await page.waitForFunction(()=>document.querySelector('#copy-status').textContent.includes('代替方式でHTML形式を渡しました'));
+  const types=await page.evaluate(async()=>(await navigator.clipboard.read())[0].types);
+  assert.ok(types.includes('text/html'));
+  assert.ok(types.includes('text/plain'));
+});
+test('identity mismatch and expired authentication clear previously loaded content',async()=>{
+  for(const failure of ['wrong-identity','unauthorized']) {
+    mode='note';
+    await openAndLoad();
+    assert.equal(await page.locator('#copy').isEnabled(),true);
+    mode=failure;
+    await page.locator('#load').click();
+    await page.waitForFunction(()=>!document.querySelector('#load').disabled);
+    assert.equal(await page.locator('#preview').innerText(),'');
+    assert.equal(await page.locator('#copy').isEnabled(),false);
+    assert.equal(await page.locator('#fallback').isEnabled(),false);
+  }
+});
+test('format change during fetch cannot enable copying stale article',async()=>{
+  mode='note';
+  await openAndLoad();
+  mode='delayed';
+  const pending=page.waitForResponse(r=>r.url().includes('/api/article'));
+  await page.locator('#load').click();
+  await page.locator('#format').selectOption('wix');
+  await pending;
+  await page.waitForFunction(()=>!document.querySelector('#load').disabled);
+  assert.equal(await page.locator('#preview').innerText(),'');
+  assert.equal(await page.locator('#copy').isEnabled(),false);
 });

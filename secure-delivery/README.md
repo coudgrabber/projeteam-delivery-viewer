@@ -1,96 +1,74 @@
-# 認証付き納品サービス（実装試作・未デプロイ）
+# 認証付き納品ビューア
 
-このディレクトリは、公開リポジトリ内に置ける**秘密情報を含まないソースコード**です。
-動作中のサービスではありません。既存の `index.html` と `app/index.html` は変更しません。
+Worker: `projeteam-secure-delivery`。既存の公開ビューアとは独立した実装です。
+環境の構築・Publish は完了済みという引継ぎを前提にしています。本変更は未デプロイです。
 
-## 設計
+## 配信の信頼境界
 
-1. Cloudflare Worker と静的サイトを専用の `workers.dev` URLに配置し、Cloudflare Access の **Worker単位・All traffic** 保護を有効にして本番URL・プレビューURLを認証必須にする。独自ドメインは初期構築に不要。
-2. Worker 自身も `Cf-Access-Jwt-Assertion` を Cloudflare公開鍵によって RS256 検証。issuer / audience / 有効期限 / 許可メールを検証し、認証されないアクセスは拒否。
-3. Worker だけが GitHub App の秘密鍵を保有し、GitHub App installation token（Contents:readのみ、かつ `SOURCE_REPO` のリポジトリ名に限定）を都度取得。ブラウザには渡さない。GitHub App自体のインストール範囲も指定リポジトリ1件に制限する。
-4. 管理者が設定した記事slugと40桁コミットSHAの**許可リスト**のみ取得できる。ブランチ名や任意パスはユーザー入力に使わない。
-5. プライベートGitHubの `docs/<slug>/deliverable-hashes.json` と対応するHTMLファイルを同一の固定コミットから取得。バイト列の SHA-256 一致後だけ配信する。
-6. ブラウザでは既知の `article#note-article` または `article#wix-article` だけを取り出し、タグ・属性のホワイトリストでDOMを再構築する。原HTMLのスクリプトは実行しない。
-7. HTML + plain text をクリップボードへ送る。コピーAPIの成功は、note/Wixでの書式保持まで保証しない。
-8. 個人認証メール、記事本文、GitHub tokenをログに記録しない設計。レスポンスは `no-store`、CSP、frame禁止。失敗時は実装・秘密情報を返さない。
+- Cloudflare Access の All traffic 保護に加え、Worker でも RS256署名、issuer、audience、exp、iat、nbf、許可メールを確認。静的ファイルと診断も認証必須。
+- GitHub App の PKCS#8秘密鍵は Worker secret のみに保持。一時トークンは Contents:read と `SOURCE_REPO` のリポジトリに制限し、ブラウザに返さない。
+- private `coudgrabber/projeteam-blog` の専用保護ブランチにある承認台帳をリクエストごとに取得。台帳に記載された固定コミットだけを取得する。
+- 台帳の承認ハッシュ、同一固定コミットの `deliverable-hashes.json`、HTMLバイト列の SHA-256 を照合。ブラウザでも再照合した後に DOM を許可タグ・属性だけで再構築する。
+- 取得失敗・不正台帳・ハッシュ不一致は配信停止。本文・秘密情報・上流エラーをログやエラーレスポンスに出さない。レスポンスは no-store、CSP と frame禁止を付与。
 
-## 管理者が行う事前準備（**未実施**）
+## 承認台帳（初回切替後は Cloudflare の記事別設定不要）
 
-- Cloudflare WorkersとZero Trustが使えるアカウントの用意。初期接続は専用の `*.workers.dev` URLを使用し、独自ドメインの購入やDNS移管は不要（共有 `*.github.io` でGitHub PATを入力する既存の試作コードは本番で使わない）。
-- GitHub Appを作成し、**Repository permissions: Contents: Read-only**、インストール先は `coudgrabber/projeteam-blog` **1リポジトリだけ**を指定。不要な権限は付けない。
-- GitHub App の **App ID、Installation ID、PKCS#8 RSA private key** を準備。GitHubのPEMが `BEGIN RSA PRIVATE KEY` 形式の場合は、オフラインでPKCS#8 `BEGIN PRIVATE KEY` 形式に変換する。秘密鍵をGitHubへcommitしない。
-- Cloudflare Workers & Pages → 対象Worker → Access → Protect this Worker behind Access → **All traffic** から保護する。認証対象のメールアドレスを明示して許可ポリシーを設定し、**本番URLとプレビューURLを両方**保護する。
-- Workerの `workers.dev` URL とAccess保護範囲を照合。キャッシュとWeb解析が非公開記事を保存しないことを確認。
+一度だけ次のサーバー設定を追加します。実環境への設定変更は別途承認後です。
 
-## 環境変数（例示値だけ）
-
-| 名前 | 例／内容 |
+| 設定 | 値 |
 |---|---|
-| `DELIVERY_ORIGIN` | `https://projeteam-secure-delivery.<account-subdomain>.workers.dev`（デプロイ後に実URLと完全一致させる） |
-| `CF_ACCESS_TEAM_DOMAIN` | `your-team.cloudflareaccess.com` |
-| `CF_ACCESS_AUD` | AccessアプリのAUDタグ |
-| `ALLOWED_EMAILS` | `writer@example.org`（カンマ区切り） |
-| `SOURCE_REPO` | `coudgrabber/projeteam-blog` |
-| `GITHUB_APP_ID` | GitHub App数値ID |
-| `GITHUB_INSTALLATION_ID` | 数値ID |
-| `GITHUB_APP_PRIVATE_KEY_PKCS8` | **シークレット**。改行を含むPKCS#8 PEM |
-| `DELIVERY_RELEASES_JSON` | 後述のJSON（**本番運用まで未設定**） |
+| `DELIVERY_LEDGER_REF` | `refs/heads/delivery-approved` |
+| `DELIVERY_LEDGER_PATH` | `delivery/approved-releases.json` |
 
-`DELIVERY_RELEASES_JSON` の書式（確定コミットのみを登録）：
+台帳も記事も `SOURCE_REPO` 内に配置します。リポジトリ権限は増やしません。
+空の雛形は `examples/approved-releases.json`。記事は一件も追加していません。
 
-```json
-{
-  "democracy-criteria": [
-    "f0f4753155b84a9380635229ad12f3695b63a59a"
-  ],
-  "world-models-language-experience": [
-    "c9ce0d58ac925a2014600fee483782b86abc6056"
-  ]
-}
-```
+台帳形式は `{"version":1,"releases":[]}`。各 releases 要素に次のフィールドが必要です。
 
-設定の書き込み（本番環境への登録・デプロイ）は**別途承認が必要**。ここでは行わない。
+| フィールド | 条件 |
+|---|---|
+| `slug` | 小文字英数字とハイフン |
+| `commit` | レビュー済みの40桁小文字コミットSHA。ブランチ名不可 |
+| `approved` | boolean の `true` のみ |
+| `hashes.note` / `hashes.wix` | 承認した各HTMLの64桁 SHA-256 |
 
-## 実装・試験
+最大500件。同一 slug・commit の重複、不正レコードが一件でもあれば台帳全体を拒否します。
+空配列は有効な「配信なし」です。削除は次の取得から反映され、取得済みのコピーは回収できません。
 
-```bash
+**`approved:true` 自体は人の承認の証明ではありません。** 専用ブランチに必須レビュー、自己承認禁止、直接push・force push・削除・管理者迂回の禁止を設定し、台帳パスのレビュー責任者を定めてください。記事生成処理から承認ブランチへ直接書き込ませません。Worker の Contents:read 権限では GitHub の管理ルールを監査できないため、この統制の設定確認を切替条件にします。
+
+記事追加は private repo で候補コミットとハッシュをレビューし、承認済み台帳へ取り込むだけです。未承認の候補、全記事の自動走査、ブランチ最新記事の自動配信はありません。
+
+互換性のため `DELIVERY_RELEASES_JSON` は台帳設定が両方ない場合だけ有効です。片方でも台帳設定があればエラー時にも旧設定へフォールバックしません。切替確認後、旧変数は削除します。旧方式では承認ハッシュの台帳照合は行いません。
+
+## 検証
+
+Node >=22。依存は lockfile 固定です。
+
+```sh
 cd secure-delivery
-node --test test/worker.test.mjs
+npm ci
+npm run check
+npm test
+npx playwright install chromium
+npm run test:browser
+npm run build
+node scripts/validate-ledger.mjs examples/approved-releases.json
 ```
 
-事前に Node.js 22以上を用意。テストは全て外部ネットワーク不要のモック。
+既設 Chromium を使う場合は `CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium npm run test:browser`。
+`npm run build` は Wrangler dry-run のみで、本番には変更しません。
 
-コードレビューで確認すべき主な点：
-- Cloudflare Accessのaudience / issuer / key検証、Accessポリシーでの全パス保護
-- GitHub App private key をWorkerシークレットだけに配置
-- 任意GitHubパスの取り出しを許容しないこと
-- ハッシュ不一致・認証エラーで fail-closed
-- 貼付先に渡るHTMLでscript、style、iframe、イベント属性が残らないこと
-- 本番ドメインとキャッシュ設定、デバッグログに本文・トークンが漏れないこと
+`/api/health` は Access検証だけ、`/api/diagnostics` は Access検証後に Appトークン取得と台帳読取り・構造検証を行います。診断は本文を取得せず、記事ごとの完全性やAppインストール全体の権限監査を保証しません。記事照合は通常の `/api/article` で実行します。
 
-## 状態
+ローカル診断は、既存の秘密情報管理から用意した ignored env file を使います。秘密情報をコマンド引数、チャットやログへ貼り付けないでください。
 
-- GitHub専用ブランチの実装・テストソース：作成済み
-- GitHub Actions Node単体テスト：6件合格（2026-11-14）
-- GitHub Actions Chromium実ブラウザテスト：5件合格（2026-11-14、合成したダミーHTMLによる検証）
-- Cloudflare Workers本番実機、AccessとGitHub Appの実認証：未検証
-- GitHub App作成、DNS、秘密情報登録、デプロイ：未実施
-- noteの既存確定HTMLを手動ブラウザ取得で貼付：利用者が4書式の保持を確認済み
+```sh
+node --env-file=.env.local scripts/diagnose.mjs github
+node --env-file=.env.local scripts/diagnose.mjs access
+```
 
-## 本番接続前の検証条件
+GitHub診断には台帳設定・SOURCE_REPO・App ID・Installation ID・PKCS#8鍵が必要です。
+Access診断は `DELIVERY_ORIGIN` を指定し、まず `CF_ACCESS_JWT` なしで拒否を確認、次に既存の許可ユーザーセッションJWTを環境に渡して許可とno-storeを確認します。本文やリダイレクトURLは出力しません。拒否のHTTP応答だけで Access設定自体の正しさは断定できません。未許可ユーザーとセッション失効、preview停止も別途実機確認します。
 
-1. Cloudflareに利用者アカウント（Workers + Zero Trust）を用意する。初期は独自ドメイン不要の `workers.dev` URLを利用する。Workers & Pages → 対象Worker → Access → **Protect this Worker behind Access → All traffic** で保護し、対象メールだけを許可。Accessポリシーとは別にWorkerがJWTを照合する。
-2. GitHub Appを **対象1リポジトリ** にインストールし、Contents: readのみを許可。キーと数値IDをWorkerの非公開環境に保管。GitHub Appのリポジトリ権限と一時トークンのリポジトリ制限を別々に確認する。
-3. GitHub App認証、Accessのログイン・セッション失効、未承認ユーザー、未承認commit、ハッシュ不一致、キャッシュ無効化を本物の環境で検証する。`workers.dev` の本番・プレビュー双方における全パス認証を確認する。
-4. 本番記事 `democracy-criteria` の確定SHAを許可リストに登録する場合も、配信内容が未公開記事であることを踏まえ、認証完了まで第三者に配信しない。
-5. noteとWixの実編集画面で書式が保持されるかユーザーが確認。公開操作は別途判断する。
-
-## 自動検証（2026-11-14確認）
-
-GitHub Actions `Secure delivery unit tests`：
-- Node 22での構文検証と単体テスト6件：合格
-- Chromiumでのブラウザ・Clipboard API・HTML安全化・fail-closedのテスト5件：合格
-- ブラウザ試験はダミーHTMLを使い、秘密情報・非公開記事は公開リポジトリに保存していない
-- 実環境への統合試験（Cloudflare Access・GitHub App・Safari・Wix）：未実施
-
-**重要：本番接続と秘密情報の設定は、この実装ブランチのコード変更とは別の作業であり、まだ行っていない。**
+GitHub Actions は PR／対象ブランチpushで設定・単体・Chromium・dry-runを実行します。本番デプロイは別の手動workflowと必須承認ゲートです。詳細は `SETUP.md`、レビュー・実行結果は `VALIDATION.md` を参照してください。

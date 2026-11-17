@@ -1,0 +1,68 @@
+name: Secure delivery approved deployment
+on:
+  workflow_dispatch:
+    inputs:
+      approved_sha:
+        description: Full reviewed commit SHA for this selected branch
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: secure-delivery-production
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: secure-delivery
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: secure-delivery/package-lock.json
+      - name: Fail closed unless reviewed SHA and external approval gate exist
+        run: node scripts/check-deploy-gate.mjs
+        env:
+          APPROVED_SHA: ${{ inputs.approved_sha }}
+          GH_TOKEN: ${{ github.token }}
+      - run: npm ci
+      - run: npm run check && npm test && npm run build
+        env:
+          WRANGLER_SEND_METRICS: 'false'
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+  deploy:
+    needs: validate
+    environment: production-delivery
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: secure-delivery
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Recheck approval gate after approval
+        run: node scripts/check-deploy-gate.mjs
+        env:
+          APPROVED_SHA: ${{ inputs.approved_sha }}
+          GH_TOKEN: ${{ github.token }}
+      - run: npm ci
+      - run: npm run check
+      - name: Deploy reviewed source and assets, preserving server-side variables
+        run: npx --no-install wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_SEND_METRICS: 'false'

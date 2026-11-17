@@ -2,6 +2,7 @@ name = "projeteam-secure-delivery"
 main = "./worker.mjs"
 compatibility_date = "2026-11-01"
 workers_dev = true
+preview_urls = false
 keep_vars = true
 
 [assets]
@@ -17,3 +18,6 @@ run_worker_first = true
 # IMPORTANT: Protect this Worker with Cloudflare Access: ALL TRAFFIC, including previews.
 # The Worker additionally validates the Access JWT and denies any unauthenticated requests.
 # A custom domain may be added after end-to-end validation.
+
+# One-time migration: DELIVERY_LEDGER_REF (private protected branch) and
+# DELIVERY_LEDGER_PATH. When either is set, the legacy allowlist is never used.

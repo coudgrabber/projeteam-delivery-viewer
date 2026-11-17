@@ -9,6 +9,7 @@
     'input','textarea','button','select','link','meta','base','noscript','img','audio','video']);
   let article = null;
   let busy = false;
+  let generation = 0;
   const enc = new TextEncoder();
   const status = msg => { $('status').textContent = msg; };
   const hex = bytes => [...bytes].map(x=>x.toString(16).padStart(2,'0')).join('');
@@ -69,6 +70,7 @@
     return r.json();
   }
   function lock() {
+    generation++;
     article = null;
     $('copy').disabled = $('fallback').disabled = true;
     $('preview').replaceChildren();
@@ -97,6 +99,7 @@
     busy=true;
     $('load').disabled = true;
     lock();
+    const current = generation;
     status('確定版の取得と完全性確認を実施しています。');
     try {
       const [slug,commit] = JSON.parse($('release').value);
@@ -109,6 +112,7 @@
       }
       const actual = await digest(data.html);
       if (actual !== data.sha256) throw new Error('取得HTMLのSHA-256が一致しません');
+      if (current !== generation) return;
       const parsed = htmlBody(data.html,format);
       $('preview').replaceChildren(parsed);
       article = parsed;

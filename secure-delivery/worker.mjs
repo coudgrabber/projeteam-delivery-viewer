@@ -47,10 +47,33 @@ async function sha256(bytes) {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest), v => v.toString(16).padStart(2, '0')).join('');
 }
+async function boundedJson(res, limit) {
+  if (!res.body) throw new Error('Missing upstream body');
+  const reader = res.body.getReader();
+  const chunks = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.length;
+      if (size > limit) throw new Error('Upstream response too large');
+      chunks.push(value);
+    }
+  } finally { await reader.cancel(); }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+  return JSON.parse(decoder.decode(bytes));
+}
+const timedFetch = fetcher => (url, options = {}) => fetcher(url, {
+  ...options, signal: AbortSignal.timeout(15000)
+});
+
 function releaseList(env) {
   const data = JSON.parse(need(env, 'DELIVERY_RELEASES_JSON'));
   if (!data || Array.isArray(data) || typeof data !== 'object') throw new Error('Invalid release configuration');
-  const result = {};
+  const result = Object.create(null);
   for (const [slug, shas] of Object.entries(data)) {
     if (!SLUG.test(slug) || !Array.isArray(shas) || shas.length === 0 || !shas.every(v => typeof v === 'string' && SHA.test(v))) {
       throw new Error('Invalid release entry');
@@ -59,6 +82,46 @@ function releaseList(env) {
   }
   if (!Object.keys(result).length) throw new Error('No releases');
   return result;
+}
+
+// An approval ledger is authoritative whenever configured; never fall back on an error.
+export function parseLedger(bytes) {
+  const data = JSON.parse(decoder.decode(bytes));
+  if (data?.version !== 1 || !Array.isArray(data.releases) || data.releases.length > 500)
+    throw new Error('Invalid ledger');
+  const releases = Object.create(null);
+  for (const entry of data.releases) {
+    if (!entry || typeof entry.slug !== 'string' || typeof entry.commit !== 'string' || !SLUG.test(entry.slug) || !SHA.test(entry.commit) || entry.approved !== true ||
+        !entry.hashes || !['note', 'wix'].every(f => typeof entry.hashes[f] === 'string' && HASH.test(entry.hashes[f])))
+      throw new Error('Invalid approval');
+    const id = entry.slug + ':' + entry.commit;
+    if (Object.hasOwn(releases, id)) throw new Error('Duplicate approval');
+    releases[id] = entry;
+  }
+  return releases;
+}
+async function approvals(env, fetcher) {
+  if (env.DELIVERY_LEDGER_REF || env.DELIVERY_LEDGER_PATH) {
+    const ref = need(env, 'DELIVERY_LEDGER_REF');
+    const path = need(env, 'DELIVERY_LEDGER_PATH');
+    if (!/^refs\/heads\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(ref) ||
+        !/^[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*\.json$/.test(path)) throw new Error('Invalid ledger configuration');
+    const token = await githubToken(env, fetcher);
+    const entries = parseLedger(await githubFile(env, token, path, ref, fetcher));
+    return { entries, token };
+  }
+  // Compatibility only for the already deployed allowlist. Explicit opt-in to ledger is one-time.
+  const entries = Object.create(null);
+  for (const [slug, commits] of Object.entries(releaseList(env)))
+    for (const commit of commits) entries[slug + ':' + commit] = { slug, commit };
+  return { entries };
+}
+export async function diagnoseGitHub(env, fetcher = globalThis.fetch) {
+  try {
+    const { entries } = await approvals(env, timedFetch(fetcher));
+    if (!env.DELIVERY_LEDGER_REF) return { status: 'legacy', github: 'not_checked' };
+    return { status: 'ok', github: 'verified', ledger: 'validated', approvals: Object.keys(entries).length };
+  } catch { return { status: 'unavailable', github: 'verification_failed' }; }
 }
 
 async function verifyAccess(request, env, fetcher) {
@@ -77,14 +140,14 @@ async function verifyAccess(request, env, fetcher) {
     const now = Math.floor(Date.now() / 1000);
     const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
     if (claims.iss !== 'https://' + domain || !audiences.includes(aud)) return false;
-    if (typeof claims.exp !== 'number' || claims.exp <= now || typeof claims.iat !== 'number' || claims.iat > now + 60) return false;
-    if (claims.nbf !== undefined && (typeof claims.nbf !== 'number' || claims.nbf > now + 60)) return false;
+    if (!Number.isFinite(claims.exp) || claims.exp <= now || !Number.isFinite(claims.iat) || claims.iat > now + 60 || claims.iat >= claims.exp) return false;
+    if (claims.nbf !== undefined && (!Number.isFinite(claims.nbf) || claims.nbf > now + 60)) return false;
     if (typeof claims.email !== 'string' || !allowed.includes(claims.email.toLowerCase())) return false;
     const r = await fetcher('https://' + domain + '/cdn-cgi/access/certs', {
       method: 'GET', redirect: 'error', credentials: 'omit', cache: 'no-store'
     });
     if (!r.ok) return false;
-    const jwks = await r.json();
+    const jwks = await boundedJson(r, 100_000);
     const key = Array.isArray(jwks.keys) && jwks.keys.find(k => k.kid === header.kid && k.kty === 'RSA');
     if (!key) return false;
     const pub = await crypto.subtle.importKey('jwk', key, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
@@ -133,13 +196,13 @@ async function githubToken(env, fetcher) {
     credentials: 'omit', redirect: 'error', cache: 'no-store'
   });
   if (!resp.ok) throw new Error('GitHub installation authentication failed');
-  const data = await resp.json();
+  const data = await boundedJson(resp, 100_000);
   if (typeof data.token !== 'string' || !data.token) throw new Error('No installation token');
   return data.token;
 }
 async function githubFile(env, token, path, sha, fetcher) {
   const url = 'https://api.github.com/repos/' + gitRepo(env) + '/contents/' +
-    path.split('/').map(encodeURIComponent).join('/') + '?ref=' + sha;
+    path.split('/').map(encodeURIComponent).join('/') + '?ref=' + encodeURIComponent(sha);
   const res = await fetcher(url, {
     method: 'GET',
     headers: { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json',
@@ -147,7 +210,7 @@ async function githubFile(env, token, path, sha, fetcher) {
     credentials: 'omit', redirect: 'error', cache: 'no-store'
   });
   if (!res.ok) throw new Error('GitHub read failed');
-  const data = await res.json();
+  const data = await boundedJson(res, 1_000_000);
   if (data.type !== 'file' || data.path !== path || data.encoding !== 'base64' ||
       !Number.isInteger(data.size) || data.size < 1 || data.size > MAX_FILE ||
       typeof data.content !== 'string') throw new Error('Invalid GitHub file');
@@ -156,17 +219,18 @@ async function githubFile(env, token, path, sha, fetcher) {
   return bytes;
 }
 async function article(env, slug, sha, format, fetcher) {
-  const releases = releaseList(env);
-  if (!Object.hasOwn(releases, slug) || !releases[slug].includes(sha) || !['note', 'wix'].includes(format)) {
+  const { entries, token: ledgerToken } = await approvals(env, fetcher);
+  const approved = entries[slug + ':' + sha];
+  if (!approved || !['note', 'wix'].includes(format)) {
     return error(404, '承認済みの記事が見つかりません');
   }
-  const token = await githubToken(env, fetcher);
+  const token = ledgerToken || await githubToken(env, fetcher);
   const directory = 'docs/' + slug + '/';
   const name = slug + (format === 'note' ? '_dialogue_note-copy.html' : '_essay_wix-copy.html');
   const hashBytes = await githubFile(env, token, directory + 'deliverable-hashes.json', sha, fetcher);
   const hashes = JSON.parse(decoder.decode(hashBytes));
   const expected = hashes && hashes[name];
-  if (typeof expected !== 'string' || !HASH.test(expected)) throw new Error('Missing approved artifact hash');
+  if (typeof expected !== 'string' || !HASH.test(expected) || (approved.hashes && approved.hashes[format] !== expected)) throw new Error('Missing approved artifact hash');
   const bytes = await githubFile(env, token, directory + name, sha, fetcher);
   const actual = await sha256(bytes);
   if (actual !== expected) throw new Error('Artifact integrity mismatch');
@@ -174,16 +238,20 @@ async function article(env, slug, sha, format, fetcher) {
 }
 export async function handleRequest(request, env, fetcher = globalThis.fetch) {
   try {
+    fetcher = timedFetch(fetcher);
     const url = new URL(request.url);
     if (url.origin !== need(env, 'DELIVERY_ORIGIN')) return error(403, '許可されていない接続元');
     if (request.method !== 'GET') return error(405, '許可されていない操作');
     if (!await verifyAccess(request, env, fetcher)) return error(401, '認証が必要です');
     // Minimal post-authentication probe: no secret values, GitHub access or article metadata.
     if (url.pathname === '/api/health') return json({ status: 'ok', access: 'verified' });
+    if (url.pathname === '/api/diagnostics') {
+      const result = await diagnoseGitHub(env, fetcher);
+      return json(result, result.status === 'unavailable' ? 503 : 200);
+    }
     if (url.pathname === '/api/releases') {
-      const releases = releaseList(env);
-      return json({ releases: Object.entries(releases).flatMap(([slug, commits]) =>
-        commits.map(commit => ({ slug, commit }))) });
+      const { entries } = await approvals(env, fetcher);
+      return json({ releases: Object.values(entries).map(({ slug, commit }) => ({ slug, commit })) });
     }
     if (url.pathname === '/api/article') {
       const slug = url.searchParams.get('slug') || '';
