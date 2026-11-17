@@ -90,3 +90,19 @@ test('different origin and non-GET rejected',async()=>{
   assert.equal((await handleRequest(new Request('https://evil.example/api/releases'),vars,mockGitHub(''))).status,403);
   assert.equal((await handleRequest(new Request(ORIGIN+'/api/releases',{method:'POST'}),vars,mockGitHub(''))).status,405);
 });
+
+test('bootstrap state with no Access or GitHub secrets refuses every request',async()=>{
+  let calls=0;
+  const noSecrets={DELIVERY_ORIGIN:ORIGIN,ASSETS:vars.ASSETS};
+  for(const path of ['/', '/app.js', '/api/releases',
+    '/api/article?slug=test-article&commit='+('a'.repeat(40))+'&format=note']) {
+    const res=await handleRequest(req(path),noSecrets,async()=>{
+      calls++;
+      throw new Error('Upstream must not be contacted before configuration');
+    });
+    assert.equal(res.status,503);
+    assert.equal(res.headers.get('Cache-Control'),'private, no-store, max-age=0');
+    assert.deepEqual(await res.json(),{error:'納品サービスを利用できません'});
+  }
+  assert.equal(calls,0);
+});
