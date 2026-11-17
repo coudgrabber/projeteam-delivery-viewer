@@ -1,0 +1,14 @@
+:root{color-scheme:light dark;font-family:system-ui,-apple-system,"Yu Gothic",sans-serif;line-height:1.7}
+body{margin:0;padding:16px;background:Canvas;color:CanvasText}
+main{max-width:780px;margin:auto}h1{font-size:1.5rem}h2{font-size:1.2rem}
+section{padding:16px;margin:18px 0;border:1px solid #888;border-radius:8px}
+label{display:block;margin:12px 0}select,button{font:inherit;padding:8px 12px}
+select{display:block;width:100%;max-width:600px}button{margin:8px 8px 8px 0}
+button[disabled]{opacity:.5}
+#status,#copy-status,#paste-report{padding:8px;background:Canvas}
+#preview{border-top:1px solid #999;margin-top:12px;padding:12px;line-height:1.9;overflow-wrap:anywhere}
+#preview h3{margin:2em 0 .7em;font-size:1.2rem}
+#preview blockquote{border-left:4px solid #888;padding:10px 18px;margin:20px 0;background:color-mix(in srgb,CanvasText 6%,Canvas)}
+#preview p{margin:0 0 1em}#preview a{overflow-wrap:anywhere}
+#paste-check{border:2px dashed #888;min-height:75px;padding:12px;overflow-wrap:anywhere}
+#paste-check:empty:before{content:"ここへ貼り付け";opacity:.65}

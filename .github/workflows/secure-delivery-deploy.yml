@@ -1,0 +1,79 @@
+name: Secure delivery approved deployment
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Current protected main SHA to deploy (revision pin only)
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+concurrency:
+  group: secure-delivery-production
+  cancel-in-progress: false
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main' && github.ref_protected
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: secure-delivery
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: secure-delivery/package-lock.json
+      - name: Verify protected main, merged PR reviews and Environment policy
+        run: node scripts/check-deploy-gate.mjs
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          GH_TOKEN: ${{ github.token }}
+          GOVERNANCE_READ_TOKEN: ${{ secrets.GOVERNANCE_READ_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check PyYAML==6.0.2
+      - run: python scripts/check-workflows.py
+      - run: npm ci
+      - run: npm run check && npm test && npm run test:governance && npm run build
+        env:
+          WRANGLER_SEND_METRICS: 'false'
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.ref_protected
+    needs: validate
+    environment: production-delivery
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: secure-delivery
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Recheck approval gate after approval
+        run: node scripts/check-deploy-gate.mjs
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          GH_TOKEN: ${{ github.token }}
+          GOVERNANCE_READ_TOKEN: ${{ secrets.GOVERNANCE_READ_TOKEN }}
+      - run: npm ci
+      - run: npm run check
+      - name: Deploy reviewed source and assets, preserving server-side variables
+        run: npx --no-install wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_SEND_METRICS: 'false'
