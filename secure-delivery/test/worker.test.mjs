@@ -106,3 +106,27 @@ test('bootstrap state with no Access or GitHub secrets refuses every request',as
   }
   assert.equal(calls,0);
 });
+
+test('authenticated health probe needs no release list or GitHub credentials',async()=>{
+  const safeEnv={
+    DELIVERY_ORIGIN:ORIGIN,
+    CF_ACCESS_TEAM_DOMAIN:vars.CF_ACCESS_TEAM_DOMAIN,
+    CF_ACCESS_AUD:vars.CF_ACCESS_AUD,
+    ALLOWED_EMAILS:vars.ALLOWED_EMAILS
+  };
+  let external=0;
+  const certsOnly=async (url)=>{
+    external++;
+    assert.equal(url,'https://team.cloudflareaccess.com/cdn-cgi/access/certs');
+    return Response.json({keys:[key]});
+  };
+  const ok=await handleRequest(req('/api/health'),safeEnv,certsOnly);
+  assert.equal(ok.status,200);
+  assert.deepEqual(await ok.json(),{status:'ok',access:'verified'});
+  assert.equal(external,1);
+  const unauthorized=await handleRequest(req('/api/health',false),safeEnv,async()=>{throw Error('unexpected network')});
+  assert.equal(unauthorized.status,401);
+  const wrongEmailToken=jwt({iss:'https://team.cloudflareaccess.com',aud:['audience-test'],email:'different@example.org',exp:now+600,iat:now-5});
+  const wrong=await handleRequest(new Request(ORIGIN+'/api/health',{headers:{'Cf-Access-Jwt-Assertion':wrongEmailToken}}),safeEnv,certsOnly);
+  assert.equal(wrong.status,401);
+});
