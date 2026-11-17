@@ -85,3 +85,22 @@ main統合・記事公開は行っておらず、今回の承認対象に暗黙�
 - 変更・未追跡ファイルの全内容を確認し、秘密鍵本体・実トークン・認証Cookie値・個人情報・private記事本文の混入は確認されませんでした。テスト内のメールはexampleドメイン、一時トークンはダミー、RSA鍵とJWTは実行時生成です。依存lockfile94レコードも検査しました。
 - 本番デプロイworkflowのイベントは workflow_dispatch のみ。push/PR workflowのbuildは dry-run 固定で、本番デプロイ資格情報を参照しません。GitHub保存によって本番deployを起動しません。
 - 保存前再実行：単体19/19、Chromium9/9合格。設定検査も合格。本番への接続・設定変更は実行していません。
+
+## 独立レビュー後の改修（未commit・未push）
+
+この節はHEAD `71f8bc1f3dac0a3e5bc6ea2c54ff9d410c0bae08` に対する独立レビューへの対応です。前節までの「GitHub保存承認」は前回保存分の記録であり、今回の追加変更は承認待ちです。現行設計・調査証拠・役割分担とリスクは `GOVERNANCE.md` を優先してください。
+
+変更：本番workflowを保護済みmain限定に変更。`approved_sha` をリビジョン固定専用の `release_sha` に改名し、実merge済みPR・最終HEADの承認（merge前）・現在のreviewer書込み権限・main保護とCIポリシー・独立Environment承認を別途検証します。actions:readとpull-requests:readを明示し、Administration:readは専用の監査tokenに分離。GET専用実APIプローブworkflowとローカルCLI、API共通処理、Actions YAML／shell／デプロイポリシー静的検証、否定試験を追加しました。required check名は `secure-delivery-verify` に固定し、PR/mainではpath filterなしで検証します。
+
+再検証：Worker単体18/18、governance49/49、Chromium9/9、設定検査、Wrangler dry-run、Actions 3 workflowのYAML／shell／ポリシー検証が成功。旧19件のうち旧ゲート1件を削除し、新ゲート49件へ置き換えたため、Worker側は18件です。全体では76件が成功しました。
+
+実機調査：viewer mainのREST応答はprotected:false。private blogのdelivery-approved検索は0件。private blog/rulesetsは403でProへのupgrade要求。main/protectionは接続AppのAdministration不足で403。実プラン名は取得不能で断定しません。NodeのEnvironment実APIプローブは通信失敗、監査tokenは未設定で停止。Actions tokenによる実API成功は未検証です。プローブの実行成功や本番運用可を報告していません。
+
+未実施：追加commit・push・PR更新・main merge・本番deploy・Cloudflare変更・private branch作成・台帳登録・記事公開。必要な次の承認は、改修のGitHub保存、読み取り専用Actionsプローブ実行、保護設定／監査資格情報／契約上の対処方針です。本番deployや記事追加は別途承認が必要です。
+
+
+## 第1.5段階のGitHub保存承認
+
+前節の改修について、利用者から全件検査・秘密情報再検査・76件再試験を条件にcommit、通常push、Draft PR #1更新、既存権限による読取り専用Actionsプローブが承認されました。default branchに新workflowを置くためのmain統合は承認されていないため、プローブ関連ファイルを対象とするfeature push起動経路を追加しました。本番deploy workflowは引き続きworkflow_dispatchだけです。
+
+4方式の比較をLEDGER-OPTIONS.mdへ追加。本人の配信同意とGitHubの独立review、コードdeploy承認を区別しています。比較は調査のみで、方式変更・記事許可はありません。main/private repo/契約/Cloudflareの設定変更、main統合、本番deployは引き続き行いません。Actions実行結果はPR説明と完了報告に記録します。

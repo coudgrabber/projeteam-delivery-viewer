@@ -221,18 +221,6 @@ test('GitHub failures and oversized responses never expose upstream body',async(
   }
 });
 
-test('deployment requires exact manual revision and non-bypassable independent approval',async()=>{
-  const {checkDeployGate}=await import('../scripts/check-deploy-gate.mjs');
-  const context={APPROVED_SHA:'a'.repeat(40),GITHUB_SHA:'a'.repeat(40),GITHUB_EVENT_NAME:'workflow_dispatch',GITHUB_REF:'refs/heads/feature/authenticated-delivery-worker',GITHUB_REPOSITORY:'coudgrabber/projeteam-delivery-viewer',GH_TOKEN:'test'};
-  const gate={can_admins_bypass:false,protection_rules:[{type:'required_reviewers',prevent_self_review:true,reviewers:[{type:'User',reviewer:{id:1}}]}]};
-  await checkDeployGate(context,async()=>Response.json(gate));
-  for(const patch of [{APPROVED_SHA:'b'.repeat(40)},{GITHUB_EVENT_NAME:'push'},{GITHUB_REF:'refs/pull/1/merge'},{GITHUB_REPOSITORY:'attacker/repo'}])
-    await assert.rejects(()=>checkDeployGate({...context,...patch},async()=>Response.json(gate)));
-  for(const settings of [{}, {...gate,can_admins_bypass:true}, {...gate,protection_rules:[]}, {...gate,protection_rules:[{type:'required_reviewers',prevent_self_review:false,reviewers:[{}]}]}])
-    await assert.rejects(()=>checkDeployGate(context,async()=>Response.json(settings)));
-  await assert.rejects(()=>checkDeployGate(context,async()=>new Response('',{status:403})));
-});
-
 test('all assets and diagnostics require Access, and authenticated assets carry security headers',async()=>{
   for(const path of ['/', '/index.html','/app.js','/style.css','/api/health','/api/diagnostics','/api/releases','/api/article']) {
     assert.equal((await handleRequest(req(path,false),vars,async()=>{throw Error('unexpected');})).status,401);

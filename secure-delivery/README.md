@@ -50,6 +50,7 @@ cd secure-delivery
 npm ci
 npm run check
 npm test
+npm run test:governance
 npx playwright install chromium
 npm run test:browser
 npm run build
@@ -72,3 +73,7 @@ GitHub診断には台帳設定・SOURCE_REPO・App ID・Installation ID・PKCS#8
 Access診断は `DELIVERY_ORIGIN` を指定し、まず `CF_ACCESS_JWT` なしで拒否を確認、次に既存の許可ユーザーセッションJWTを環境に渡して許可とno-storeを確認します。本文やリダイレクトURLは出力しません。拒否のHTTP応答だけで Access設定自体の正しさは断定できません。未許可ユーザーとセッション失効、preview停止も別途実機確認します。
 
 GitHub Actions は PR／対象ブランチpushで設定・単体・Chromium・dry-runを実行します。本番デプロイは別の手動workflowと必須承認ゲートです。詳細は `SETUP.md`、レビュー・実行結果は `VALIDATION.md` を参照してください。
+
+## 独立レビュー後の変更
+
+本番は保護済みmainの現在HEADのみ。SHA一致はリビジョン固定に限定し、main保護・実際にmerge済みのPR・PR最新HEADへの人の承認・独立Environment承認を別々に検査します。現時点ではmain未保護、private repoの保護機能はAPIがプラン制限403を返しているため本番化条件を満たしません。詳細・権限・調査証拠・残る管理者リスクは `GOVERNANCE.md` を参照してください。

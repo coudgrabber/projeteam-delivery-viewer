@@ -21,11 +21,16 @@ Cloudflare Access は本番ホストの全パスを保護し、許可メール�
 
 ## GitHub Actions 本番承認ゲート
 
+独立レビュー後の必須条件は `GOVERNANCE.md` を参照してください。現在mainは未保護、private repoのrulesets APIはProアップグレード要求403であり、この手順の本番移行は停止しています。
+
+- `actions: read` / `pull-requests: read` / `contents: read` をworkflowに明示。保護設定読取りには別の `GOVERNANCE_READ_TOKEN`（viewer repo一件のAdministration:readのみ）を使用します。納品Appの権限は増やしません。
+- mainは必須PRレビュー・古い承認の失効・最終push承認・CODEOWNERS承認・管理者も適用・迂回なし・force push/削除禁止、GitHub Actions app由来の `secure-delivery-verify` 必須チェックを設定します。
+
 - Environment `production-delivery` を設定し、必須 reviewer、Prevent self-review、Allow administrators to bypass を無効に設定します。使用プランで必須レビューを利用できない場合、このworkflowは利用できません。
 - Environment secrets に最小権限の `CLOUDFLARE_API_TOKEN` と `CLOUDFLARE_ACCOUNT_ID` を保持。Worker の App秘密鍵・許可メール・記事台帳はGitHub Actionsへ複製しません。
-- Environment の deployment branch policy を運用ブランチに制限します。workflowは main または指定featureブランチだけを受け付けます。
-- GitHub の手動workflow起動には、workflow定義がデフォルトブランチに存在する条件があります。現在は main統合を禁止されているため、今回workflowの実起動は行いません。
-- 別途承認後、レビュー済みソースを配置して手動workflowの `approved_sha` に選択ブランチHEADの完全SHAを指定。設定確認・全試験後に Environment 承認待ちへ進みます。
+- Environment の deployment branch policy を運用ブランチに制限します。EnvironmentのSelected branchesはbranch型の `main` 一件だけにします。Protected branches onlyは保護ゼロの場合に全ブランチを許可するため使いません。workflowも保護済みmainだけを受け付けます。
+- GitHub の手動workflow起動には、workflow定義がデフォルトブランチに存在する条件があります。現在は main統合を禁止されているため、今回本番workflowの実起動は行いません。読み取り専用プローブは承認されたfeature push経路で実行します。
+- 別途承認後、レビュー済みソースを配置して手動workflowの `release_sha` に保護済みmainの現在HEADの完全SHAを指定。SHA一致だけをレビュー完了とは扱いません。設定確認・全試験後に Environment 承認待ちへ進みます。
 - Environment APIを読めない場合も停止します。権限の自動拡張やゲート省略はしません。必須レビューと迂回禁止は承認後にも再確認します。
 - Wrangler は既存 Worker の vars を維持してコードとassetsを配置します。Accessポリシー、台帳ブランチ保護、秘密情報登録は変更しません。初回本番接続ではそれらを別途検証する必要があります。
 
@@ -38,3 +43,5 @@ Cloudflare Access は本番ホストの全パスを保護し、許可メール�
 - note／Wix の非公開テスト編集画面でダミー文章を貼付し、見出し・太字・引用・リンク・表等を確認。保存・公開は別途承認なしで行わないこと。
 
 ログイン・OTP・必要な管理権限付与だけは人の操作が必要な場合があります。秘密鍵やトークンをチャットに送る必要はありません。
+
+第1.5段階の改修は、再検査と76件の再試験を条件にcommit・通常push・Draft PR更新・既存権限による読取り専用Actionsプローブが承認されました。本番設定・main統合・記事配信は未承認です。
