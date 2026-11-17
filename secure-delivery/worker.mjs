@@ -178,6 +178,8 @@ export async function handleRequest(request, env, fetcher = globalThis.fetch) {
     if (url.origin !== need(env, 'DELIVERY_ORIGIN')) return error(403, '許可されていない接続元');
     if (request.method !== 'GET') return error(405, '許可されていない操作');
     if (!await verifyAccess(request, env, fetcher)) return error(401, '認証が必要です');
+    // Minimal post-authentication probe: no secret values, GitHub access or article metadata.
+    if (url.pathname === '/api/health') return json({ status: 'ok', access: 'verified' });
     if (url.pathname === '/api/releases') {
       const releases = releaseList(env);
       return json({ releases: Object.entries(releases).flatMap(([slug, commits]) =>
